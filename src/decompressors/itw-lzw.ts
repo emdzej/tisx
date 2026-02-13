@@ -29,7 +29,8 @@ export interface ItwBlockTable {
 
 export function parseItwBlockTable(
   buffer: Buffer,
-  dataOffset: number
+  dataOffset: number,
+  options: Pick<ItwDecompressOptions, 'forceAbsolute' | 'forceRelative' | 'debug'> = {}
 ): ItwBlockTable | null {
   const tableOffset = 0x10;
   if (buffer.length < tableOffset + 4) return null;
@@ -60,9 +61,17 @@ export function parseItwBlockTable(
   // Try relative first; if that fails but absolute would work, use absolute.
   const tableEnd = tableOffset + 4 + blockCount * 2;
   const maxDataSize = buffer.length - dataOffset;
-  
+
+  if (options.forceAbsolute && options.forceRelative) {
+    throw new Error('forceAbsolute and forceRelative are mutually exclusive');
+  }
+
   let absoluteOffsets = false;
-  if (prevEnd <= maxDataSize) {
+  if (options.forceAbsolute) {
+    absoluteOffsets = true;
+  } else if (options.forceRelative) {
+    absoluteOffsets = false;
+  } else if (prevEnd <= maxDataSize) {
     // Relative offsets fit
     absoluteOffsets = false;
   } else if (prevEnd <= buffer.length) {
@@ -71,6 +80,23 @@ export function parseItwBlockTable(
   } else {
     // Neither fits
     return null;
+  }
+
+  if (options.debug) {
+    const mode = absoluteOffsets ? 'absolute' : 'relative';
+    const offsetNote = absoluteOffsets ? 'file-start' : `dataOffset(${dataOffset})`;
+    // Keep logs readable even for large block tables.
+    const previewCount = Math.min(blockEndOffsets.length, 16);
+    const preview = blockEndOffsets.slice(0, previewCount).join(', ');
+    const previewSuffix = blockEndOffsets.length > previewCount ? ', ...' : '';
+    // eslint-disable-next-line no-console
+    console.log(
+      `[itw] block table: blocks=${blockCount} tableEnd=0x${tableEnd.toString(16)} ` +
+        `dataOffset=0x${dataOffset.toString(16)} maxDataSize=${maxDataSize} ` +
+        `lastEnd=${prevEnd} mode=${mode} (from ${offsetNote})`
+    );
+    // eslint-disable-next-line no-console
+    console.log(`[itw] block end offsets: ${preview}${previewSuffix}`);
   }
 
   return {
@@ -87,6 +113,9 @@ export interface ItwDecompressOptions {
   hasClearCode?: boolean;
   streamHeader?: boolean;
   maxOutput?: number;
+  forceAbsolute?: boolean;
+  forceRelative?: boolean;
+  debug?: boolean;
 }
 
 export function decompressItwLzw(
@@ -504,8 +533,10 @@ export function decompressItwMultiBlock(
 ) {
   const header = parseItwHeader(buffer);
   const blockTable =
-    header.version >= 2 ? null : parseItwBlockTable(buffer, header.dataOffset);
-  
+    header.version >= 2
+      ? null
+      : parseItwBlockTable(buffer, header.dataOffset, options);
+
   const expected = Math.floor(header.width * header.height * (header.bpp / 8));
   const tableOffset = 0x10;
   const tableEnd = blockTable 
@@ -550,13 +581,27 @@ export function decompressItwMultiBlock(
   const chunks: Buffer[] = [];
 
   for (let i = 0; i < blockTable.blockCount; i++) {
-    const prevOffset = i === 0 ? (blockTable.absoluteOffsets ? tableEnd : 0) : blockTable.blockEndOffsets[i - 1];
+    const prevOffset =
+      i === 0
+        ? blockTable.absoluteOffsets
+          ? tableEnd
+          : 0
+        : blockTable.blockEndOffsets[i - 1];
     const start = blockTable.absoluteOffsets
       ? prevOffset
       : header.dataOffset + prevOffset;
     const end = blockTable.absoluteOffsets
       ? blockTable.blockEndOffsets[i]
       : header.dataOffset + blockTable.blockEndOffsets[i];
+    if (options.debug) {
+      const size = Math.max(0, end - start);
+      // eslint-disable-next-line no-console
+      console.log(
+        `[itw] block ${i + 1}/${blockTable.blockCount}: start=0x${start.toString(
+          16
+        )} end=0x${end.toString(16)} size=${size}`
+      );
+    }
     if (start >= buffer.length) break;
     const compressed = buffer.slice(start, Math.min(end, buffer.length));
     const decompressed = decompressItwBlockAuto(
@@ -584,7 +629,9 @@ export function decompressItwFile(
 ) {
   const header = parseItwHeader(buffer);
   const blockTable =
-    header.version >= 2 ? null : parseItwBlockTable(buffer, header.dataOffset);
+    header.version >= 2
+      ? null
+      : parseItwBlockTable(buffer, header.dataOffset, options);
   if (blockTable) {
     return decompressItwMultiBlock(buffer, options);
   }

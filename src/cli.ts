@@ -13,8 +13,11 @@ Usage:
   decomp-itw <input.itw> [output] --format raw|pgm|png
 
 Options:
-  --format <fmt>   raw | pgm | png (default: raw)
-  -h, --help       show help
+  --format <fmt>     raw | pgm | png (default: raw)
+  --force-absolute   force absolute block offsets (debug)
+  --force-relative   force relative block offsets (debug)
+  --debug            enable verbose ITW logging
+  -h, --help         show help
 
 Examples:
   decomp-itw samples/itw_samples/34.ITW out.raw --format raw
@@ -45,6 +48,10 @@ function parseFormat(args: string[]): OutputFormat {
   return value;
 }
 
+function hasFlag(args: string[], flag: string): boolean {
+  return args.includes(flag);
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.length === 0 || args.includes('-h') || args.includes('--help')) {
@@ -55,6 +62,9 @@ async function main() {
   const input = args[0];
   const output = args[1];
   const format = parseFormat(args);
+  const forceAbsolute = hasFlag(args, '--force-absolute');
+  const forceRelative = hasFlag(args, '--force-relative');
+  const debug = hasFlag(args, '--debug');
 
   if (!input || !output) {
     printHelp();
@@ -62,7 +72,11 @@ async function main() {
   }
 
   const buffer = fs.readFileSync(input);
-  const { header, data } = decompressItwFile(buffer);
+  const { header, data } = decompressItwFile(buffer, {
+    forceAbsolute,
+    forceRelative,
+    debug,
+  });
 
   if (format === 'pgm') {
     if (header.bpp !== 8) {
