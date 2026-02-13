@@ -1,4 +1,5 @@
 export interface ItwHeader {
+  version: number;
   width: number;
   height: number;
   bpp: number;
@@ -7,13 +8,15 @@ export interface ItwHeader {
 }
 
 export function parseItwHeader(buffer: Buffer): ItwHeader {
+  const version = buffer.readUInt8(4);
   const width = buffer.readUInt16BE(6);
   const height = buffer.readUInt16BE(8);
   const bpp = buffer.readUInt16BE(10);
   const dataOffsetBlocks = buffer.readUInt8(12);
-  const dataOffset = dataOffsetBlocks * 256;
+  const dataOffset =
+    version >= 2 ? buffer.readUInt16BE(12) : dataOffsetBlocks * 256;
 
-  return { width, height, bpp, dataOffsetBlocks, dataOffset };
+  return { version, width, height, bpp, dataOffsetBlocks, dataOffset };
 }
 
 export interface ItwBlockTable {
@@ -132,6 +135,9 @@ export function decompressItwLzw(
     const stack: number[] = [];
     while (code >= 256) {
       stack.push(suffix[code]);
+      if (stack.length > maxDictSize) {
+        throw new Error('Invalid LZW dictionary loop');
+      }
       code = prefix[code];
     }
     stack.push(code);
@@ -232,6 +238,62 @@ function decompressPackBits(input: Buffer | Uint8Array): Buffer {
   return Buffer.from(output) as Buffer;
 }
 
+function decompressItwRle8(
+  input: Buffer | Uint8Array,
+  width: number,
+  height: number
+): Buffer {
+  const output = Buffer.alloc(width * height);
+  let x = 0;
+  let y = 0;
+  let pos = 0;
+
+  const writePixel = (value: number) => {
+    if (x >= width) {
+      x = 0;
+      y += 1;
+    }
+    if (y >= height) return;
+    output[y * width + x] = value;
+    x += 1;
+  };
+
+  while (pos + 1 < input.length && y < height) {
+    const count = input[pos++];
+    const value = input[pos++];
+
+    if (count > 0) {
+      for (let i = 0; i < count; i++) {
+        writePixel(value);
+        if (y >= height) break;
+      }
+      continue;
+    }
+
+    if (value === 0x00) {
+      x = 0;
+      y += 1;
+    } else if (value === 0x01) {
+      break;
+    } else if (value === 0x02) {
+      if (pos + 1 >= input.length) break;
+      const dx = input[pos++];
+      const dy = input[pos++];
+      x += dx;
+      y += dy;
+    } else {
+      const countAbs = value;
+      for (let i = 0; i < countAbs && pos < input.length; i++) {
+        writePixel(input[pos++]);
+        if (y >= height) break;
+      }
+      if (countAbs % 2 === 1) pos += 1;
+    }
+  }
+
+  return output as Buffer;
+}
+
 function decompressItwBlockAuto(
   block: Buffer,
   options: ItwDecompressOptions,
@@ -300,9 +362,18 @@ export function decompressItwMultiBlock(
   options: ItwDecompressOptions = {}
 ) {
   const header = parseItwHeader(buffer);
-  const blockTable = parseItwBlockTable(buffer, header.dataOffset);
+  const blockTable =
+    header.version >= 2 ? null : parseItwBlockTable(buffer, header.dataOffset);
   if (!blockTable) {
     const compressed = buffer.subarray(header.dataOffset);
+    if (header.version >= 2) {
+      const data = decompressItwRle8(
+        compressed,
+        header.width,
+        header.height
+      );
+      return { header, data, blockTable: null };
+    }
     const data = decompressItwLzw(compressed, options);
     return { header, data, blockTable: null };
   }
@@ -334,14 +405,34 @@ export function decompressItwMultiBlock(
   return { header, data, blockTable };
 }
 
-export function decompressItwFile(buffer: Buffer, options: ItwDecompressOptions = {}) {
+export function decompressItwFile(
+  buffer: Buffer,
+  options: ItwDecompressOptions = {}
+) {
   const header = parseItwHeader(buffer);
-  const blockTable = parseItwBlockTable(buffer, header.dataOffset);
+  const blockTable =
+    header.version >= 2 ? null : parseItwBlockTable(buffer, header.dataOffset);
   if (blockTable) {
     return decompressItwMultiBlock(buffer, options);
   }
 
   const compressed = buffer.subarray(header.dataOffset);
-  const data = decompressItwLzw(compressed, options);
+  if (header.version >= 2) {
+    const data = decompressItwRle8(compressed, header.width, header.height);
+    return { header, data };
+  }
+
+  const expected = Math.floor(header.width * header.height * (header.bpp / 8));
+  let data = decompressItwBlockAuto(
+    compressed,
+    options,
+    expected > 0 ? expected : undefined
+  );
+  if (expected > 0 && data.length !== expected) {
+    const rle = decompressPackBits(data) as Buffer;
+    if (rle.length === expected || rle.length > data.length) {
+      data = rle;
+    }
+  }
   return { header, data };
 }
