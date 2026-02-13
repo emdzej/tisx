@@ -238,15 +238,17 @@ function decompressPackBits(input: Buffer | Uint8Array): Buffer {
   return Buffer.from(output) as Buffer;
 }
 
-function decompressItwRle8(
+function decompressItwRle8WithStatus(
   input: Buffer | Uint8Array,
   width: number,
   height: number
-): Buffer {
+): { data: Buffer; written: number; completed: boolean } {
   const output = Buffer.alloc(width * height);
   let x = 0;
   let y = 0;
   let pos = 0;
+  let written = 0;
+  let completed = false;
 
   const writePixel = (value: number) => {
     if (x >= width) {
@@ -256,16 +258,20 @@ function decompressItwRle8(
     if (y >= height) return;
     output[y * width + x] = value;
     x += 1;
+    written += 1;
   };
 
-  while (pos + 1 < input.length && y < height) {
+  while (pos + 1 < input.length && !completed) {
     const count = input[pos++];
     const value = input[pos++];
 
     if (count > 0) {
       for (let i = 0; i < count; i++) {
         writePixel(value);
-        if (y >= height) break;
+        if (y >= height) {
+          completed = true;
+          break;
+        }
       }
       continue;
     }
@@ -273,7 +279,9 @@ function decompressItwRle8(
     if (value === 0x00) {
       x = 0;
       y += 1;
+      if (y >= height) completed = true;
     } else if (value === 0x01) {
+      completed = true;
       break;
     } else if (value === 0x02) {
       if (pos + 1 >= input.length) break;
@@ -281,17 +289,29 @@ function decompressItwRle8(
       const dy = input[pos++];
       x += dx;
       y += dy;
+      if (y >= height) completed = true;
     } else {
       const countAbs = value;
       for (let i = 0; i < countAbs && pos < input.length; i++) {
         writePixel(input[pos++]);
-        if (y >= height) break;
+        if (y >= height) {
+          completed = true;
+          break;
+        }
       }
       if (countAbs % 2 === 1) pos += 1;
     }
   }
 
-  return output as Buffer;
+  return { data: output as Buffer, written, completed };
+}
+
+function decompressItwRle8(
+  input: Buffer | Uint8Array,
+  width: number,
+  height: number
+): Buffer {
+  return decompressItwRle8WithStatus(input, width, height).data as Buffer;
 }
 
 function decompressItwBlockAuto(
@@ -326,9 +346,7 @@ function decompressItwBlockAuto(
     }
   };
 
-  if (headerByte <= 0x7f) {
-    pushTry({ streamHeader: true });
-  }
+  pushTry({ streamHeader: true });
 
   for (const maxBits of maxBitsCandidates) {
     pushTry({ streamHeader: false, hasClearCode: true, maxBits });
@@ -357,6 +375,70 @@ function decompressItwBlockAuto(
   return best;
 }
 
+function decompressItwV2LzwRle8(
+  block: Buffer,
+  width: number,
+  height: number,
+  options: ItwDecompressOptions = {}
+): Buffer {
+  const expected = width * height;
+
+  if (
+    options.maxBits !== undefined ||
+    options.hasClearCode !== undefined ||
+    options.streamHeader !== undefined
+  ) {
+    const lzw = decompressItwLzw(block, options);
+    return decompressItwRle8(lzw, width, height);
+  }
+
+  const tries: ItwDecompressOptions[] = [];
+  const maxBitsCandidates = [12, 11, 10, 9, 16, 15, 14, 13];
+
+  const pushTry = (entry: ItwDecompressOptions) => {
+    if (
+      !tries.some(
+        (t) =>
+          t.streamHeader === entry.streamHeader &&
+          t.hasClearCode === entry.hasClearCode &&
+          t.maxBits === entry.maxBits
+      )
+    ) {
+      tries.push(entry);
+    }
+  };
+
+  for (const maxBits of maxBitsCandidates) {
+    pushTry({ streamHeader: false, hasClearCode: false, maxBits });
+    pushTry({ streamHeader: false, hasClearCode: true, maxBits });
+  }
+
+  pushTry({ streamHeader: true });
+  for (const maxBits of maxBitsCandidates) {
+    pushTry({ streamHeader: true, hasClearCode: false, maxBits });
+    pushTry({ streamHeader: true, hasClearCode: true, maxBits });
+  }
+
+  let best: { data: Buffer; written: number; completed: boolean } | null = null;
+
+  for (const attempt of tries) {
+    try {
+      const lzw = decompressItwLzw(block, attempt);
+      const result = decompressItwRle8WithStatus(lzw, width, height);
+      if (result.completed && result.written >= expected) {
+        return result.data;
+      }
+      if (!best || result.written > best.written) {
+        best = result;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  return best ? best.data : Buffer.alloc(0);
+}
+
 export function decompressItwMultiBlock(
   buffer: Buffer,
   options: ItwDecompressOptions = {}
@@ -367,14 +449,28 @@ export function decompressItwMultiBlock(
   if (!blockTable) {
     const compressed = buffer.subarray(header.dataOffset);
     if (header.version >= 2) {
-      const data = decompressItwRle8(
+      const data = decompressItwV2LzwRle8(
         compressed,
         header.width,
-        header.height
+        header.height,
+        options
       );
       return { header, data, blockTable: null };
     }
-    const data = decompressItwLzw(compressed, options);
+    const expected = Math.floor(
+      header.width * header.height * (header.bpp / 8)
+    );
+    const data = decompressItwBlockAuto(
+      compressed,
+      options,
+      expected > 0 ? expected : undefined
+    );
+    if (expected > 0 && data.length !== expected) {
+      const rle = decompressPackBits(data) as Buffer;
+      if (rle.length === expected || rle.length > data.length) {
+        return { header, data: rle, blockTable: null };
+      }
+    }
     return { header, data, blockTable: null };
   }
 
@@ -418,10 +514,14 @@ export function decompressItwFile(
 
   const compressed = buffer.subarray(header.dataOffset);
   if (header.version >= 2) {
-    const data = decompressItwRle8(compressed, header.width, header.height);
+    const data = decompressItwV2LzwRle8(
+      compressed,
+      header.width,
+      header.height,
+      options
+    );
     return { header, data };
   }
-
   const expected = Math.floor(header.width * header.height * (header.bpp / 8));
   let data = decompressItwBlockAuto(
     compressed,
