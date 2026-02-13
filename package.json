@@ -12,6 +12,9 @@
     "clean": "rm -rf dist",
     "test": "node dist/cli.js --help"
   },
+  "dependencies": {
+    "sharp": "^0.33.5"
+  },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "typescript": "^5.7.2"

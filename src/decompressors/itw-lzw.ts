@@ -24,6 +24,7 @@ export interface ItwBlockTable {
   blockCount: number;
   blockEndOffsets: number[];
   blockSizes: number[];
+  absoluteOffsets?: boolean;
 }
 
 export function parseItwBlockTable(
@@ -55,12 +56,30 @@ export function parseItwBlockTable(
     prevEnd = end;
   }
 
+  // Determine whether offsets are absolute (from file start) or relative to dataOffset.
+  // Try relative first; if that fails but absolute would work, use absolute.
+  const tableEnd = tableOffset + 4 + blockCount * 2;
   const maxDataSize = buffer.length - dataOffset;
-  if (prevEnd > maxDataSize) {
+  
+  let absoluteOffsets = false;
+  if (prevEnd <= maxDataSize) {
+    // Relative offsets fit
+    absoluteOffsets = false;
+  } else if (prevEnd <= buffer.length) {
+    // Relative doesn't fit, but absolute does
+    absoluteOffsets = true;
+  } else {
+    // Neither fits
     return null;
   }
 
-  return { fileSizeMinus18, blockCount, blockEndOffsets, blockSizes };
+  return {
+    fileSizeMinus18,
+    blockCount,
+    blockEndOffsets,
+    blockSizes,
+    absoluteOffsets,
+  };
 }
 
 export interface ItwDecompressOptions {
@@ -486,6 +505,23 @@ export function decompressItwMultiBlock(
   const header = parseItwHeader(buffer);
   const blockTable =
     header.version >= 2 ? null : parseItwBlockTable(buffer, header.dataOffset);
+  
+  const expected = Math.floor(header.width * header.height * (header.bpp / 8));
+  const tableOffset = 0x10;
+  const tableEnd = blockTable 
+    ? tableOffset + 4 + blockTable.blockCount * 2 
+    : tableOffset;
+
+  // For V1 files with block table, first try Simple RLE from right after block table
+  // Some V1 files store raw Simple RLE data, not LZW compressed blocks
+  if (blockTable && blockTable.absoluteOffsets && expected > 0) {
+    const rleData = buffer.subarray(tableEnd);
+    const rleResult = decompressItwSimpleRleWithStatus(rleData, header.width, header.height);
+    if (rleResult.completed && rleResult.written === expected) {
+      return { header, data: rleResult.data, blockTable };
+    }
+  }
+
   if (!blockTable) {
     const compressed = buffer.subarray(header.dataOffset);
     if (header.version >= 2) {
@@ -497,9 +533,6 @@ export function decompressItwMultiBlock(
       );
       return { header, data, blockTable: null };
     }
-    const expected = Math.floor(
-      header.width * header.height * (header.bpp / 8)
-    );
     const data = decompressItwBlockAuto(
       compressed,
       options,
@@ -514,12 +547,16 @@ export function decompressItwMultiBlock(
     return { header, data, blockTable: null };
   }
 
-  const expected = Math.floor(header.width * header.height * (header.bpp / 8));
   const chunks: Buffer[] = [];
+
   for (let i = 0; i < blockTable.blockCount; i++) {
-    const start =
-      header.dataOffset + (i === 0 ? 0 : blockTable.blockEndOffsets[i - 1]);
-    const end = header.dataOffset + blockTable.blockEndOffsets[i];
+    const prevOffset = i === 0 ? (blockTable.absoluteOffsets ? tableEnd : 0) : blockTable.blockEndOffsets[i - 1];
+    const start = blockTable.absoluteOffsets
+      ? prevOffset
+      : header.dataOffset + prevOffset;
+    const end = blockTable.absoluteOffsets
+      ? blockTable.blockEndOffsets[i]
+      : header.dataOffset + blockTable.blockEndOffsets[i];
     if (start >= buffer.length) break;
     const compressed = buffer.slice(start, Math.min(end, buffer.length));
     const decompressed = decompressItwBlockAuto(

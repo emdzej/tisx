@@ -15,10 +15,13 @@ pnpm run build
 
 ```bash
 # raw output
-pnpm exec decomp-itw samples/itw_samples/34.ITW out.raw
+pnpm exec decomp-itw samples/itw_samples/34.ITW out.raw --format raw
 
 # PGM output (8bpp only)
-pnpm exec decomp-itw samples/itw_samples/34.ITW out.pgm --pgm
+pnpm exec decomp-itw samples/itw_samples/34.ITW out.pgm --format pgm
+
+# PNG output (8bpp only)
+pnpm exec decomp-itw samples/itw_samples/34.ITW out.png --format png
 ```
 
 ## ITW format notes
