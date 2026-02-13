@@ -289,7 +289,8 @@ function decompressPackBits(input: Buffer | Uint8Array): Buffer {
 function decompressItwSimpleRleWithStatus(
   input: Buffer | Uint8Array,
   width: number,
-  height: number
+  height: number,
+  options: { debug?: boolean; label?: string } = {}
 ): { data: Buffer; written: number; completed: boolean } {
   const output = Buffer.alloc(width * height);
   let x = 0;
@@ -297,6 +298,7 @@ function decompressItwSimpleRleWithStatus(
   let pos = 0;
   let written = 0;
   let completed = false;
+  let stopReason = '';
 
   const writePixel = (value: number) => {
     if (x >= width) {
@@ -318,9 +320,29 @@ function decompressItwSimpleRleWithStatus(
       writePixel(value);
       if (y >= height) {
         completed = true;
+        stopReason = 'completed: output filled';
         break;
       }
     }
+  }
+
+  if (!stopReason) {
+    if (completed) {
+      stopReason = 'completed: output filled';
+    } else if (pos + 1 >= input.length) {
+      stopReason = 'stopped: input exhausted';
+    } else {
+      stopReason = 'stopped: unknown';
+    }
+  }
+
+  if (options.debug) {
+    const label = options.label ? ` (${options.label})` : '';
+    // eslint-disable-next-line no-console
+    console.log(
+      `[itw] simple-rle${label}: input=${input.length} bytes, processed=${pos} bytes, ` +
+        `written=${written}, completed=${completed} (${stopReason})`
+    );
   }
 
   return { data: output as Buffer, written, completed };
@@ -477,7 +499,10 @@ function decompressItwV2LzwSimpleRle(
     options.streamHeader !== undefined
   ) {
     const lzw = decompressItwLzw(block, options);
-    return decompressItwSimpleRleWithStatus(lzw, width, height).data;
+    return decompressItwSimpleRleWithStatus(lzw, width, height, {
+      debug: options.debug,
+      label: 'v2-lzw-simple',
+    }).data;
   }
 
   const tries: ItwDecompressOptions[] = [];
@@ -512,7 +537,10 @@ function decompressItwV2LzwSimpleRle(
   for (const attempt of tries) {
     try {
       const lzw = decompressItwLzw(block, attempt);
-      const result = decompressItwSimpleRleWithStatus(lzw, width, height);
+      const result = decompressItwSimpleRleWithStatus(lzw, width, height, {
+        debug: options.debug,
+        label: 'v2-lzw-try',
+      });
       if (result.completed && result.written === expected) {
         return result.data;
       }
@@ -547,7 +575,10 @@ export function decompressItwMultiBlock(
   // Some V1 files store raw Simple RLE data, not LZW compressed blocks
   if (blockTable && blockTable.absoluteOffsets && expected > 0) {
     const rleData = buffer.subarray(tableEnd);
-    const rleResult = decompressItwSimpleRleWithStatus(rleData, header.width, header.height);
+    const rleResult = decompressItwSimpleRleWithStatus(rleData, header.width, header.height, {
+      debug: options.debug,
+      label: 'v1-direct',
+    });
     if (rleResult.completed && rleResult.written === expected) {
       return { header, data: rleResult.data, blockTable };
     }
@@ -609,14 +640,34 @@ export function decompressItwMultiBlock(
       options,
       expected > 0 ? expected : undefined
     );
+    if (options.debug) {
+      // eslint-disable-next-line no-console
+      console.log(
+        `[itw] block ${i + 1}/${blockTable.blockCount}: input=${compressed.length} bytes ` +
+          `output=${decompressed.length} bytes`
+      );
+    }
     chunks.push(decompressed);
   }
 
   let data: Buffer = Buffer.concat(chunks) as Buffer;
   if (expected > 0 && data.length !== expected) {
-    const rle = decompressPackBits(data) as Buffer;
-    if (rle.length === expected || rle.length > data.length) {
-      data = rle;
+    const simple = decompressItwSimpleRleWithStatus(
+      data,
+      header.width,
+      header.height,
+      {
+        debug: options.debug,
+        label: 'v1-blocks-simple',
+      }
+    );
+    if (simple.completed && simple.written === expected) {
+      data = simple.data;
+    } else {
+      const rle = decompressPackBits(data) as Buffer;
+      if (rle.length === expected || rle.length > data.length) {
+        data = rle;
+      }
     }
   }
 
@@ -653,9 +704,22 @@ export function decompressItwFile(
     expected > 0 ? expected : undefined
   );
   if (expected > 0 && data.length !== expected) {
-    const rle = decompressPackBits(data) as Buffer;
-    if (rle.length === expected || rle.length > data.length) {
-      data = rle;
+    const simple = decompressItwSimpleRleWithStatus(
+      data,
+      header.width,
+      header.height,
+      {
+        debug: options.debug,
+        label: 'v1-single-simple',
+      }
+    );
+    if (simple.completed && simple.written === expected) {
+      data = simple.data;
+    } else {
+      const rle = decompressPackBits(data) as Buffer;
+      if (rle.length === expected || rle.length > data.length) {
+        data = rle;
+      }
     }
   }
   return { header, data };
