@@ -238,6 +238,46 @@ function decompressPackBits(input: Buffer | Uint8Array): Buffer {
   return Buffer.from(output) as Buffer;
 }
 
+function decompressItwSimpleRleWithStatus(
+  input: Buffer | Uint8Array,
+  width: number,
+  height: number
+): { data: Buffer; written: number; completed: boolean } {
+  const output = Buffer.alloc(width * height);
+  let x = 0;
+  let y = 0;
+  let pos = 0;
+  let written = 0;
+  let completed = false;
+
+  const writePixel = (value: number) => {
+    if (x >= width) {
+      x = 0;
+      y += 1;
+    }
+    if (y >= height) return;
+    output[y * width + x] = value;
+    x += 1;
+    written += 1;
+  };
+
+  while (pos + 1 < input.length && !completed) {
+    const count = input[pos++];
+    const value = input[pos++];
+    const runLen = count + 1;
+
+    for (let i = 0; i < runLen; i++) {
+      writePixel(value);
+      if (y >= height) {
+        completed = true;
+        break;
+      }
+    }
+  }
+
+  return { data: output as Buffer, written, completed };
+}
+
 function decompressItwRle8WithStatus(
   input: Buffer | Uint8Array,
   width: number,
@@ -375,7 +415,7 @@ function decompressItwBlockAuto(
   return best;
 }
 
-function decompressItwV2LzwRle8(
+function decompressItwV2LzwSimpleRle(
   block: Buffer,
   width: number,
   height: number,
@@ -389,7 +429,7 @@ function decompressItwV2LzwRle8(
     options.streamHeader !== undefined
   ) {
     const lzw = decompressItwLzw(block, options);
-    return decompressItwRle8(lzw, width, height);
+    return decompressItwSimpleRleWithStatus(lzw, width, height).data;
   }
 
   const tries: ItwDecompressOptions[] = [];
@@ -424,8 +464,8 @@ function decompressItwV2LzwRle8(
   for (const attempt of tries) {
     try {
       const lzw = decompressItwLzw(block, attempt);
-      const result = decompressItwRle8WithStatus(lzw, width, height);
-      if (result.completed && result.written >= expected) {
+      const result = decompressItwSimpleRleWithStatus(lzw, width, height);
+      if (result.completed && result.written === expected) {
         return result.data;
       }
       if (!best || result.written > best.written) {
@@ -449,7 +489,7 @@ export function decompressItwMultiBlock(
   if (!blockTable) {
     const compressed = buffer.subarray(header.dataOffset);
     if (header.version >= 2) {
-      const data = decompressItwV2LzwRle8(
+      const data = decompressItwV2LzwSimpleRle(
         compressed,
         header.width,
         header.height,
@@ -514,7 +554,7 @@ export function decompressItwFile(
 
   const compressed = buffer.subarray(header.dataOffset);
   if (header.version >= 2) {
-    const data = decompressItwV2LzwRle8(
+    const data = decompressItwV2LzwSimpleRle(
       compressed,
       header.width,
       header.height,
