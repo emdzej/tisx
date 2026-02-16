@@ -59,7 +59,7 @@ find "$INPUT_DIR" -type f -iname "*.rtf" | while read -r rtf_file; do
     printf "[%d/%d] %s... " "$count" "$total" "$rel_path"
     
     # Convert with pandoc
-    if pandoc -f rtf -t markdown-grid_tables -o "$md_file" "$rtf_file" 2>/dev/null; then
+    if pandoc -f rtf -t markdown -o "$md_file" "$rtf_file" 2>/dev/null; then
         echo "OK"
     else
         echo "FAILED"
