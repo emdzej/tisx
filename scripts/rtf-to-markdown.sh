@@ -49,8 +49,8 @@ find "$INPUT_DIR" -type f -iname "*.rtf" | while read -r rtf_file; do
     
     # Get relative path and create output path
     rel_path="${rtf_file#$INPUT_DIR/}"
-    md_file="$OUTPUT_DIR/${rel_path%.rtf}.md"
-    md_file="${md_file%.RTF}.md"  # Handle uppercase extension
+    md_file="$OUTPUT_DIR/${rel_path%.*}.md"
+    # Handle uppercase extension
     output_dir=$(dirname "$md_file")
     
     # Create output subdirectory
@@ -59,7 +59,7 @@ find "$INPUT_DIR" -type f -iname "*.rtf" | while read -r rtf_file; do
     printf "[%d/%d] %s... " "$count" "$total" "$rel_path"
     
     # Convert with pandoc
-    if pandoc -f rtf -t markdown -o "$md_file" "$rtf_file" 2>/dev/null; then
+    if pandoc -f rtf -t markdown-grid_tables -o "$md_file" "$rtf_file" 2>/dev/null; then
         echo "OK"
     else
         echo "FAILED"
