@@ -21,6 +21,8 @@ if [[ ! -d "$BASE_PATH" ]]; then
   exit 1
 fi
 
+BASE_PATH=$(cd "$BASE_PATH" && pwd)
+
 DB_PATH="docs.sqlite"
 
 sqlite3 "$DB_PATH" <<'SQL'
@@ -32,14 +34,7 @@ CREATE TABLE IF NOT EXISTS content (
 SQL
 
 find "$BASE_PATH" -type f -name "*.md" -print0 | while IFS= read -r -d '' FILE_PATH; do
-  REL_PATH=$(python3 - <<'PY' "$FILE_PATH" "$BASE_PATH"
-import os
-import sys
-file_path = sys.argv[1]
-base_path = sys.argv[2]
-print(os.path.relpath(file_path, base_path))
-PY
-  )
+  REL_PATH="${FILE_PATH#"$BASE_PATH"/}"
 
   DIR_PATH=$(dirname "$REL_PATH")
   if [[ "$DIR_PATH" == "." ]]; then
@@ -48,9 +43,9 @@ PY
 
   sqlite3 "$DB_PATH" <<SQL
 .param init
-.param set :id $REL_PATH
-.param set :path $DIR_PATH
-.param set :file $FILE_PATH
+.param set :id "$REL_PATH"
+.param set :path "$DIR_PATH"
+.param set :file "$FILE_PATH"
 INSERT INTO content (id, path, content)
 VALUES (:id, :path, readfile(:file));
 SQL
