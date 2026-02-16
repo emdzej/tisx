@@ -27,10 +27,12 @@ DB_PATH="docs.sqlite"
 
 sqlite3 "$DB_PATH" <<'SQL'
 CREATE TABLE IF NOT EXISTS content (
-  id TEXT PRIMARY KEY,
-  path TEXT,
+  id VARCHAR PRIMARY KEY,
+  path VARCHAR,
   content TEXT
 );
+CREATE INDEX IF NOT EXISTS idx_content_id ON content(id);
+CREATE INDEX IF NOT EXISTS idx_content_path ON content(path);
 SQL
 
 find "$BASE_PATH" -type f -name "*.md" -print0 | while IFS= read -r -d '' FILE_PATH; do
