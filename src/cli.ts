@@ -2,7 +2,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import sharp from 'sharp';
-import { decompressItwFile } from './decompressors/itw-lzw';
+import { decompressItwFile } from './decompressors/itw-lzw.js';
+import { isItwV1, decodeItwV1 } from './decompressors/itw-wavelet.js';
 
 type OutputFormat = 'raw' | 'pgm' | 'png';
 
@@ -12,10 +13,14 @@ function printHelp() {
 Usage:
   decomp-itw <input.itw> [output] --format raw|pgm|png
 
+Supported formats:
+  V1 (0x0300)  - Wavelet compression (LL-only decode, full reconstruction WIP)
+  V2 (0x0400)  - LZW + RLE compression
+
 Options:
   --format <fmt>     raw | pgm | png (default: raw)
-  --force-absolute   force absolute block offsets (debug)
-  --force-relative   force relative block offsets (debug)
+  --force-absolute   force absolute block offsets (debug, V2 only)
+  --force-relative   force relative block offsets (debug, V2 only)
   --debug            enable verbose ITW logging
   -h, --help         show help
 
@@ -52,6 +57,43 @@ function hasFlag(args: string[], flag: string): boolean {
   return args.includes(flag);
 }
 
+interface DecodeResult {
+  width: number;
+  height: number;
+  bpp: number;
+  data: Buffer;
+  format: 'V1' | 'V2';
+  llOnly?: boolean;
+}
+
+function decodeItw(
+  buffer: Buffer,
+  options: { forceAbsolute?: boolean; forceRelative?: boolean; debug?: boolean }
+): DecodeResult {
+  // Check if V1 (wavelet) format
+  if (isItwV1(buffer)) {
+    const result = decodeItwV1(buffer);
+    return {
+      width: result.header.width,
+      height: result.header.height,
+      bpp: result.header.bitDepth,
+      data: result.pixels,
+      format: 'V1',
+      llOnly: result.llOnly,
+    };
+  }
+
+  // Fall back to V2 (LZW) format
+  const { header, data } = decompressItwFile(buffer, options);
+  return {
+    width: header.width,
+    height: header.height,
+    bpp: header.bpp,
+    data,
+    format: 'V2',
+  };
+}
+
 async function main() {
   const args = process.argv.slice(2);
   if (args.length === 0 || args.includes('-h') || args.includes('--help')) {
@@ -72,33 +114,34 @@ async function main() {
   }
 
   const buffer = fs.readFileSync(input);
-  const { header, data } = decompressItwFile(buffer, {
+  const result = decodeItw(buffer, {
     forceAbsolute,
     forceRelative,
     debug,
   });
 
   if (format === 'pgm') {
-    if (header.bpp !== 8) {
-      throw new Error(`PGM output only supports 8bpp. Found ${header.bpp}bpp.`);
+    if (result.bpp !== 8) {
+      throw new Error(`PGM output only supports 8bpp. Found ${result.bpp}bpp.`);
     }
-    writePgm(header.width, header.height, data, output);
+    writePgm(result.width, result.height, result.data, output);
   } else if (format === 'png') {
-    if (header.bpp !== 8) {
-      throw new Error(`PNG output only supports 8bpp grayscale. Found ${header.bpp}bpp.`);
+    if (result.bpp !== 8) {
+      throw new Error(`PNG output only supports 8bpp grayscale. Found ${result.bpp}bpp.`);
     }
-    await sharp(data, {
-      raw: { width: header.width, height: header.height, channels: 1 },
+    await sharp(result.data, {
+      raw: { width: result.width, height: result.height, channels: 1 },
     })
       .png()
       .toFile(output);
   } else {
-    fs.writeFileSync(output, data);
+    fs.writeFileSync(output, result.data);
   }
 
   const outRel = path.relative(process.cwd(), output);
+  const llNote = result.llOnly ? ' (LL-only, full wavelet WIP)' : '';
   process.stdout.write(
-    `Wrote ${data.length} bytes (${header.width}x${header.height}, ${header.bpp}bpp) to ${outRel}\n`
+    `[${result.format}${llNote}] Wrote ${result.data.length} bytes (${result.width}x${result.height}, ${result.bpp}bpp) to ${outRel}\n`
   );
 }
 
