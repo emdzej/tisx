@@ -131,3 +131,25 @@ Stream 0 analysis (LH0 subband, 2380 bytes):
 Needs more analysis of tis.exe decompiled code, specifically:
 - `FUN_004b72b0` (subband coefficient decoder)
 - `FUN_004b8500` (coefficient extraction)
+
+## Stream-to-Subband Mapping (Discovered)
+
+### Direct Storage Streams
+Streams with size exactly matching subband size contain direct coefficients:
+
+| Stream | Size | Avg | Subband | Type |
+|--------|------|-----|---------|------|
+| 16 | 300 | 49.4 | LL3 | Pixel values (unsigned) |
+| 4 | 1200 | 8.8 | LH2 | Signed coefficients |
+| 18 | 300 | 21.2 | Level 3 detail | Signed coefficients |
+
+### RLE Encoded Streams
+Larger subbands (Level 0, 1) use RLE encoding:
+- **Stream pairs**: Low-avg stream (positions) + High-avg stream (values)
+- **Encoding**: Byte 0 = place value, Byte 1-127 = skip N, Byte 128-255 = embedded coeff
+
+### Reconstruction Strategy
+1. Extract LL3 from direct stream (normalize pixel values)
+2. Extract available detail subbands (direct or RLE decoded)
+3. Apply inverse wavelet transform level by level
+4. Currently: LL-only reconstruction works, detail integration WIP
