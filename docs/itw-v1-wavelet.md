@@ -96,3 +96,38 @@ Based on decompiled `FUN_004b72b0`:
 Location: `/Users/emdzej/Documents/tis/GRAFIK/`
 - ~47,660 ITW files (99% V1 format)
 - Test file: `1/03/95/26.ITW` (316×238)
+
+## Coefficient Encoding Analysis (WIP)
+
+Based on reverse engineering of stream structure:
+
+### Stream Pairing
+
+Streams appear in pairs:
+1. **Sparse stream** (avg ~5-15, many zeros): Position/run-length data
+2. **Dense stream** (avg ~100-130): Coefficient values
+
+### Run-Length Encoding
+
+Stream 0 analysis (LH0 subband, 2380 bytes):
+- 74% zeros (1773 bytes)
+- Small values 0x02-0x08: ~524 occurrences (skip counts?)
+- High values 0x86-0x88: ~82 occurrences (embedded values?)
+
+### Observations
+
+- First 234 bytes are zero (sparse beginning)
+- Non-zero values appear in clusters
+- High byte values (>= 0x80) may indicate embedded coefficients
+- Total decompressed: 16,694 bytes vs 75,208 pixels = ~22% density
+
+### Remaining Questions
+
+1. Exact RLE encoding scheme (escape codes?)
+2. How skip counts relate to value placement
+3. Whether values are signed (centered at 128?)
+4. Quantization step application
+
+Needs more analysis of tis.exe decompiled code, specifically:
+- `FUN_004b72b0` (subband coefficient decoder)
+- `FUN_004b8500` (coefficient extraction)
