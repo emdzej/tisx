@@ -13,13 +13,13 @@ Usage:
   tisx info <file.itw>
   tisx help
 
-Modes:
+Supported formats:
+  V1 (0x0300)  CDF 5/3 wavelet - SUPPORTED
+  V2 (0x0400)  LZW + RLE - NOT YET SUPPORTED
+
+Modes (V1 only):
   bilinear  Smooth upscale from LL4 (default, best quality)
   cdf53     CDF 5/3 wavelet reconstruction
-
-Examples:
-  tisx decode image.itw
-  tisx decode image.itw out.png --mode=cdf53
 `);
 }
 
@@ -27,12 +27,14 @@ function cmdInfo(filePath: string) {
   const data = fs.readFileSync(filePath);
   const header = parseItwHeader(data);
   
+  const supported = header.formatVersion === 0x0300;
+  const versionName = header.formatVersion === 0x0300 ? 'V1 (wavelet)' :
+                      header.formatVersion === 0x0400 ? 'V2 (LZW+RLE)' : '?';
+  
   console.log(`File: ${path.basename(filePath)}`);
   console.log(`Size: ${data.length} bytes`);
-  console.log(`Magic: ${header.magic}`);
-  console.log(`Format: ITW V${header.formatVersion === 0x0300 ? '1' : '?'} (0x${header.formatVersion.toString(16)})`);
+  console.log(`Format: ITW ${versionName} (0x${header.formatVersion.toString(16)})${supported ? '' : ' [NOT SUPPORTED]'}`);
   console.log(`Dimensions: ${header.width}×${header.height}`);
-  console.log(`Compressed: ${header.compressedSize} bytes`);
 }
 
 type DecodeMode = 'bilinear' | 'cdf53';
@@ -42,7 +44,7 @@ function cmdDecode(filePath: string, outputPath?: string, mode: DecodeMode = 'bi
   const header = parseItwHeader(data);
   
   if (header.formatVersion !== 0x0300) {
-    console.error(`Unsupported: 0x${header.formatVersion.toString(16)} (only V1/0x0300)`);
+    console.error(`Unsupported format: 0x${header.formatVersion.toString(16)} (only V1/0x0300 supported)`);
     process.exit(1);
   }
   
