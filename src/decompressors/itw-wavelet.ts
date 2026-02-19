@@ -121,6 +121,47 @@ export function findZlibStreams(data: Buffer): ZlibStream[] {
 }
 
 /**
+ * Decode RLE-encoded coefficient stream
+ *
+ * RLE encoding:
+ * - 0x00: Place next coefficient from value stream, advance position by 1
+ * - 0x01-0x7F: Skip N positions (no coefficient)
+ * - 0x80-0xFF: Embedded coefficient (value - 192), advance position by 1
+ */
+export function decodeRleCoefficients(
+  rleData: Buffer,
+  valueData: Buffer,
+  maxSize: number
+): number[] {
+  const coeffs = new Array(maxSize).fill(0);
+  let pos = 0;
+  let valIdx = 0;
+
+  for (const byte of rleData) {
+    if (pos >= maxSize) break;
+
+    if (byte === 0) {
+      // Place coefficient from value stream
+      if (valIdx < valueData.length) {
+        const v = valueData[valIdx];
+        coeffs[pos] = v > 127 ? v - 256 : v; // Signed int8
+        valIdx++;
+      }
+      pos++;
+    } else if (byte < 128) {
+      // Skip N positions
+      pos += byte;
+    } else {
+      // Embedded coefficient (centered at 192)
+      coeffs[pos] = byte - 192;
+      pos++;
+    }
+  }
+
+  return coeffs;
+}
+
+/**
  * Bilinear upscale
  */
 function bilinearUpscale(
