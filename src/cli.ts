@@ -1,151 +1,152 @@
 #!/usr/bin/env node
-import fs from 'node:fs';
-import path from 'node:path';
-import sharp from 'sharp';
-import { decompressItwFile } from './decompressors/itw-lzw.js';
-import { isItwV1, decodeItwV1 } from './decompressors/itw-wavelet.js';
+/**
+ * tisx CLI - ITW Image Decoder
+ */
 
-type OutputFormat = 'raw' | 'pgm' | 'png';
+import { readFileSync, writeFileSync } from 'fs';
+import { inflateSync, deflateSync } from 'zlib';
 
-function printHelp() {
-  const help = `tisx - BMW TIS ITW tools
-
-Usage:
-  decomp-itw <input.itw> [output] --format raw|pgm|png
-
-Supported formats:
-  V1 (0x0300)  - Wavelet compression (LL-only decode, full reconstruction WIP)
-  V2 (0x0400)  - LZW + RLE compression
-
-Options:
-  --format <fmt>     raw | pgm | png (default: raw)
-  --force-absolute   force absolute block offsets (debug, V2 only)
-  --force-relative   force relative block offsets (debug, V2 only)
-  --debug            enable verbose ITW logging
-  -h, --help         show help
-
-Examples:
-  decomp-itw samples/itw_samples/34.ITW out.raw --format raw
-  decomp-itw samples/itw_samples/34.ITW out.pgm --format pgm
-  decomp-itw samples/itw_samples/34.ITW out.png --format png
-`;
-  process.stdout.write(help);
-}
-
-function buildPgmBuffer(width: number, height: number, data: Buffer) {
-  const header = `P5\n${width} ${height}\n255\n`;
-  return Buffer.concat([Buffer.from(header, 'ascii'), data]);
-}
-
-function writePgm(width: number, height: number, data: Buffer, outPath: string) {
-  const out = buildPgmBuffer(width, height, data);
-  fs.writeFileSync(outPath, out);
-}
-
-function parseFormat(args: string[]): OutputFormat {
-  const idx = args.indexOf('--format');
-  if (idx === -1) return 'raw';
-  const value = args[idx + 1];
-  if (!value) throw new Error('Missing value for --format');
-  if (value !== 'raw' && value !== 'pgm' && value !== 'png') {
-    throw new Error(`Unknown format: ${value}`);
-  }
-  return value;
-}
-
-function hasFlag(args: string[], flag: string): boolean {
-  return args.includes(flag);
-}
-
-interface DecodeResult {
+interface DecodedImage {
   width: number;
   height: number;
-  bpp: number;
-  data: Buffer;
+  pixels: number[];
   format: 'V1' | 'V2';
-  llOnly?: boolean;
 }
 
-function decodeItw(
-  buffer: Buffer,
-  options: { forceAbsolute?: boolean; forceRelative?: boolean; debug?: boolean }
-): DecodeResult {
-  // Check if V1 (wavelet) format
-  if (isItwV1(buffer)) {
-    const result = decodeItwV1(buffer);
-    return {
-      width: result.header.width,
-      height: result.header.height,
-      bpp: result.header.bitDepth,
-      data: result.pixels,
-      format: 'V1',
-      llOnly: result.llOnly,
-    };
-  }
-
-  // Fall back to V2 (LZW) format
-  const { header, data } = decompressItwFile(buffer, options);
-  return {
-    width: header.width,
-    height: header.height,
-    bpp: header.bpp,
-    data,
-    format: 'V2',
-  };
-}
-
-async function main() {
-  const args = process.argv.slice(2);
-  if (args.length === 0 || args.includes('-h') || args.includes('--help')) {
-    printHelp();
-    return;
-  }
-
-  const input = args[0];
-  const output = args[1];
-  const format = parseFormat(args);
-  const forceAbsolute = hasFlag(args, '--force-absolute');
-  const forceRelative = hasFlag(args, '--force-relative');
-  const debug = hasFlag(args, '--debug');
-
-  if (!input || !output) {
-    printHelp();
-    process.exit(1);
-  }
-
-  const buffer = fs.readFileSync(input);
-  const result = decodeItw(buffer, {
-    forceAbsolute,
-    forceRelative,
-    debug,
-  });
-
-  if (format === 'pgm') {
-    if (result.bpp !== 8) {
-      throw new Error(`PGM output only supports 8bpp. Found ${result.bpp}bpp.`);
+function writePng(filename: string, pixels: number[], width: number, height: number): void {
+  const crc32Table: number[] = [];
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) {
+      c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
     }
-    writePgm(result.width, result.height, result.data, output);
-  } else if (format === 'png') {
-    if (result.bpp !== 8) {
-      throw new Error(`PNG output only supports 8bpp grayscale. Found ${result.bpp}bpp.`);
-    }
-    await sharp(result.data, {
-      raw: { width: result.width, height: result.height, channels: 1 },
-    })
-      .png()
-      .toFile(output);
-  } else {
-    fs.writeFileSync(output, result.data);
+    crc32Table[i] = c;
   }
-
-  const outRel = path.relative(process.cwd(), output);
-  const llNote = result.llOnly ? ' (LL-only, full wavelet WIP)' : '';
-  process.stdout.write(
-    `[${result.format}${llNote}] Wrote ${result.data.length} bytes (${result.width}x${result.height}, ${result.bpp}bpp) to ${outRel}\n`
-  );
+  
+  function crc32(buf: Buffer): number {
+    let crc = 0xFFFFFFFF;
+    for (const byte of buf) {
+      crc = crc32Table[(crc ^ byte) & 0xFF] ^ (crc >>> 8);
+    }
+    return (crc ^ 0xFFFFFFFF) >>> 0;
+  }
+  
+  function chunk(type: string, data: Buffer): Buffer {
+    const len = Buffer.alloc(4);
+    len.writeUInt32BE(data.length, 0);
+    const typeBytes = Buffer.from(type, 'ascii');
+    const combined = Buffer.concat([typeBytes, data]);
+    const crcVal = crc32(combined);
+    const crcBuf = Buffer.alloc(4);
+    crcBuf.writeUInt32BE(crcVal, 0);
+    return Buffer.concat([len, combined, crcBuf]);
+  }
+  
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(width, 0);
+  ihdr.writeUInt32BE(height, 4);
+  ihdr[8] = 8; ihdr[9] = 0; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;
+  
+  const rawData: number[] = [];
+  for (let y = 0; y < height; y++) {
+    rawData.push(0);
+    for (let x = 0; x < width; x++) {
+      rawData.push(Math.max(0, Math.min(255, Math.round(pixels[y * width + x]))));
+    }
+  }
+  
+  const compressed = deflateSync(Buffer.from(rawData));
+  const png = Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]),
+    chunk('IHDR', ihdr), chunk('IDAT', compressed), chunk('IEND', Buffer.alloc(0))
+  ]);
+  writeFileSync(filename, png);
 }
 
-main().catch((err) => {
-  process.stderr.write(`${err instanceof Error ? err.message : String(err)}\n`);
+function findZlibStreams(data: Buffer): Buffer[] {
+  const streams: Buffer[] = [];
+  let pos = 0;
+  while (pos < data.length - 2) {
+    if (data[pos] === 0x78 && [0x01, 0x5E, 0x9C, 0xDA].includes(data[pos + 1])) {
+      for (let end = pos + 2; end <= data.length; end++) {
+        try {
+          streams.push(inflateSync(data.subarray(pos, end)));
+          pos = end;
+          break;
+        } catch { continue; }
+      }
+    } else { pos++; }
+  }
+  return streams;
+}
+
+function bilinearUpscale(img: number[], srcW: number, srcH: number, dstW: number, dstH: number): number[] {
+  const result: number[] = [];
+  for (let y = 0; y < dstH; y++) {
+    for (let x = 0; x < dstW; x++) {
+      const sx = x * (srcW - 1) / Math.max(1, dstW - 1);
+      const sy = y * (srcH - 1) / Math.max(1, dstH - 1);
+      const x0 = Math.floor(sx), y0 = Math.floor(sy);
+      const x1 = Math.min(x0 + 1, srcW - 1), y1 = Math.min(y0 + 1, srcH - 1);
+      const fx = sx - x0, fy = sy - y0;
+      result.push(
+        img[y0*srcW+x0]*(1-fx)*(1-fy) + img[y0*srcW+x1]*fx*(1-fy) +
+        img[y1*srcW+x0]*(1-fx)*fy + img[y1*srcW+x1]*fx*fy
+      );
+    }
+  }
+  return result;
+}
+
+function decodeItwV1(data: Buffer): DecodedImage {
+  const width = data.readUInt16BE(6), height = data.readUInt16BE(8);
+  const compressedSize = data.readUInt32BE(14);
+  const streams = findZlibStreams(data.subarray(18, 18 + compressedSize));
+  
+  const llW = Math.ceil(Math.ceil(Math.ceil(Math.ceil(width/2)/2)/2)/2);
+  const llH = Math.ceil(Math.ceil(Math.ceil(Math.ceil(height/2)/2)/2)/2);
+  const ll4Size = llW * llH;
+  
+  let llStream: Buffer | null = null;
+  for (const stream of streams) {
+    if (stream.length !== ll4Size) continue;
+    const mean = [...stream].reduce((a,b) => a+b, 0) / stream.length;
+    const zeros = [...stream].filter(v => v === 0).length;
+    if (mean > 40 && zeros === 0) { llStream = stream; break; }
+  }
+  if (!llStream) throw new Error('Could not find LL band');
+  
+  const ll = [...llStream];
+  const min = Math.min(...ll), max = Math.max(...ll);
+  const llNorm = ll.map(v => (v - min) * 255 / (max - min || 1));
+  const pixels = bilinearUpscale(llNorm, llW, llH, width, height);
+  return { width, height, pixels, format: 'V1' };
+}
+
+const args = process.argv.slice(2);
+if (args.length < 1) {
+  console.log('Usage: tisx <input.itw> [output.png]');
   process.exit(1);
-});
+}
+
+const inputFile = args[0];
+const outputFile = args[1] || inputFile.replace(/\.itw$/i, '.png');
+
+try {
+  const data = readFileSync(inputFile);
+  if (data.subarray(0, 4).toString('ascii') !== 'ITW_') throw new Error('Not ITW');
+  const typeCode = data.readUInt16BE(12);
+  
+  if (typeCode === 0x0300) {
+    console.log(`Decoding V1: ${inputFile}`);
+    const image = decodeItwV1(data);
+    console.log(`${image.width}x${image.height}`);
+    writePng(outputFile, image.pixels, image.width, image.height);
+    console.log(`Saved: ${outputFile}`);
+  } else {
+    throw new Error(`Type 0x${typeCode.toString(16)} not supported`);
+  }
+} catch (err) {
+  console.error(`Error: ${err instanceof Error ? err.message : err}`);
+  process.exit(1);
+}

@@ -1,29 +1,20 @@
 {
   "name": "tisx",
   "version": "0.1.0",
-  "description": "BMW TIS image format decompressor & tools",
+  "description": "ITW image decoder for BMW TIS",
   "type": "module",
-  "main": "dist/cli.js",
   "bin": {
-    "decomp-itw": "dist/cli.js"
+    "tisx": "./dist/cli.js"
   },
   "scripts": {
     "build": "tsc",
-    "clean": "rm -rf dist"
+    "start": "node dist/cli.js"
   },
-  "dependencies": {
-    "sharp": "^0.33.5"
-  },
-  "devDependencies": {
-    "@types/node": "^22.10.0",
-    "typescript": "^5.7.2"
-  },
-  "engines": {
-    "node": ">=18"
-  },
+  "keywords": ["bmw", "tis", "itw", "decoder", "wavelet"],
+  "author": "emdzej",
   "license": "MIT",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/emdzej/tisx.git"
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
   }
 }
