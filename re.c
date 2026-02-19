@@ -216,3 +216,79 @@ float10 __cdecl FUN_004b8a40(int param_1)
   return ((float10)16.0 - (float10)param_1) * (float10)0.0625;
 }
 
+
+/* ============================================
+ * ITW File Reading Functions
+ * Extracted from original decompilation
+ * ============================================ */
+
+/* Quantization table for subbands */
+static uint QUANT_TABLE[11] = {8, 8, 4, 4, 4, 2, 2, 2, 1, 1, 1};
+
+/* FUN_004b56f0 - Read big-endian 16-bit value */
+short __cdecl read_be16(FILE *f)
+{
+    int b1 = fgetc(f);
+    int b2 = fgetc(f);
+    return (short)(b1 * 256 + b2);
+}
+
+/* FUN_004b5680 - Parse ITW header */
+uint __cdecl parse_itw_header(FILE *f, int *width, int *height, int *bpp)
+{
+    read_be16(f);  /* skip magic word 1 */
+    read_be16(f);  /* skip magic word 2 */
+    read_be16(f);  /* skip flags */
+    *width = read_be16(f);
+    *height = read_be16(f);
+    *bpp = read_be16(f);
+    return 0;
+}
+
+/* FUN_004bc1d0 - Read single bit from stream (LSB first) */
+/* Global state for bit reading */
+static unsigned char *bit_stream_ptr;
+static int bit_position = 0;
+static unsigned char current_byte;
+
+void init_bit_stream(unsigned char *data)
+{
+    bit_stream_ptr = data;
+    bit_position = 0;
+    current_byte = *bit_stream_ptr;
+}
+
+int read_bit(void)
+{
+    int bit = current_byte & 1;
+    bit_position++;
+    current_byte >>= 1;
+    if (bit_position == 8) {
+        bit_position = 0;
+        bit_stream_ptr++;
+        current_byte = *bit_stream_ptr;
+    }
+    return bit;
+}
+
+/* FUN_004bc220 - Read N bits from stream */
+uint read_bits(int n)
+{
+    uint result = 0;
+    uint mask = 1;
+    for (int i = 0; i < n; i++) {
+        if (read_bit()) {
+            result |= mask;
+        }
+        mask <<= 1;
+    }
+    return result;
+}
+
+/* Value decoding:
+ * - If bit 7 = 0: direct signed value (bits 0-6)
+ * - If bit 7 = 1: Fischer coded
+ *   - Read 4 bits for range
+ *   - Read prob_table[quant][range] bits for selector
+ *   - Decode using fischer_decode
+ */
