@@ -153,3 +153,32 @@ Larger subbands (Level 0, 1) use RLE encoding:
 2. Extract available detail subbands (direct or RLE decoded)
 3. Apply inverse wavelet transform level by level
 4. Currently: LL-only reconstruction works, detail integration WIP
+
+## Detailed Stream Analysis (26.ITW)
+
+### Direct Storage Streams
+| Stream | Size | Content | Notes |
+|--------|------|---------|-------|
+| 4 | 1200 | LH2 | 40×30 signed coefficients, avg 8.8, 894/1200 near zero |
+| 16 | 300 | LL3 | 20×15 pixel values (21-80 range), avg 49.4 |
+| 18 | 300 | Detail L3 | 20×15, low values (7-42), likely HH3 or HL3 |
+
+### RLE-Encoded Streams
+Low-avg + high-avg pairs for larger subbands:
+- s0 (avg 5.7, 1773 zeros) + s1 (avg 101.2) → ~LH1
+- s2 (avg 7.5, 1731 zeros) + s3 (avg 109.2) → ~HL1
+
+### Coefficient Characteristics
+- LH2 (stream 4): 894/1200 values in range -5 to +5
+- Detail bands are sparse - most coefficients near zero
+- High-value coefficients mark edges
+
+### Wavelet Dimensions Verified
+```
+Level 0: full=316×238, LL=158×119
+Level 1: full=158×119, LL=79×60
+Level 2: full=79×60, LL=40×30
+Level 3: full=40×30, LL=20×15
+```
+
+LH2 = 40×30 = 1200 (matches stream 4 size exactly)
