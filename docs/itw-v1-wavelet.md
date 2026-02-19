@@ -334,3 +334,33 @@ cb 00 15 00 e0 07 36 0d c2 14 6b 00 f4
 - [ ] Reverse-engineer metadata format
 - [ ] Map parameters to quantization tables
 - [ ] Understand relationship to stream offsets
+
+## RLE + Fischer Decoding Progress
+
+### RLE Format (Working Hypothesis)
+- `0`: Place Fischer pair (2 coefficients from value stream)
+- `1-127`: Skip N positions, then place Fischer pair
+- `128-255`: Place embedded coefficient (byte - 192 = -64 to +63)
+
+### Fischer Triangular Number Decode
+```python
+def fischer_decode_pair(index):
+    n = int((-1 + sqrt(1 + 8*index)) / 2)
+    return n, index - n*(n+1)//2
+```
+This produces pairs (c1, c2) where c1 >= c2 >= 0.
+
+### Coefficient Statistics
+- LH1: ~1992 non-zero coefficients in 18802 positions (~10.6% density)
+- HL1: ~2866 non-zero coefficients
+- Coefficients concentrated at start of subband (positions 0-4357)
+
+### Current Issues
+1. Coefficient sign interpretation unclear
+2. Grid pattern artifacts from CDF 7/5 upscaling without full detail bands
+3. Only achieving partial reconstruction (details visible at top of image)
+
+### Next Steps
+- Need dequantization formula from decompiled code
+- Verify CDF 7/5 lifting implementation
+- Map all 4 levels of detail bands
