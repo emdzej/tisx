@@ -162,6 +162,94 @@ export function decodeRleCoefficients(
 }
 
 /**
+ * 1D CDF 7/5 inverse wavelet transform using integer lifting
+ */
+function cdf75Inverse1D(s: number[], d: number[] | null, outLen: number): number[] {
+  const sCopy = [...s];
+  const dArr = d || [];
+
+  // Inverse Update: s[n] -= (d[n-1] + d[n] + 2) / 4
+  for (let i = 0; i < sCopy.length; i++) {
+    const left = i > 0 && dArr.length ? dArr[i - 1] : 0;
+    const right = i < dArr.length ? dArr[i] : dArr.length ? dArr[dArr.length - 1] : 0;
+    sCopy[i] = sCopy[i] - (left + right + 2) / 4;
+  }
+
+  // Interleave
+  const result = new Array(outLen).fill(0);
+  for (let i = 0; i < sCopy.length; i++) {
+    if (2 * i < outLen) {
+      result[2 * i] = sCopy[i];
+    }
+  }
+
+  // Inverse Predict: d[n] += (x[2n] + x[2n+2]) / 2
+  for (let i = 0; i < dArr.length; i++) {
+    if (2 * i + 1 < outLen) {
+      const left = result[2 * i];
+      const right = 2 * i + 2 < outLen ? result[2 * i + 2] : result[2 * i];
+      result[2 * i + 1] = dArr[i] + (left + right) / 2;
+    }
+  }
+
+  return result;
+}
+
+/**
+ * 2D CDF 7/5 inverse wavelet transform
+ */
+function cdf75Inverse2D(
+  ll: number[],
+  lh: number[] | null,
+  hl: number[] | null,
+  hh: number[] | null,
+  outW: number,
+  outH: number
+): number[] {
+  const llW = Math.ceil(outW / 2);
+  const llH = Math.ceil(outH / 2);
+  const lhH = outH - llH;
+  const hlW = outW - llW;
+
+  const to2D = (arr: number[] | null, w: number, h: number): number[][] =>
+    Array.from({ length: h }, (_, y) =>
+      Array.from({ length: w }, (_, x) => (arr && y * w + x < arr.length ? arr[y * w + x] : 0))
+    );
+
+  const ll2d = to2D(ll, llW, llH);
+  const lh2d = to2D(lh, llW, lhH);
+  const hl2d = to2D(hl, hlW, llH);
+  const hh2d = to2D(hh, hlW, lhH);
+
+  // Vertical reconstruction
+  const leftCols = Array.from({ length: llW }, (_, x) =>
+    cdf75Inverse1D(
+      ll2d.map((row) => row[x]),
+      lh2d.map((row) => row[x]),
+      outH
+    )
+  );
+
+  const rightCols = Array.from({ length: hlW }, (_, x) =>
+    cdf75Inverse1D(
+      hl2d.map((row) => row[x]),
+      hh2d.map((row) => row[x]),
+      outH
+    )
+  );
+
+  // Horizontal reconstruction
+  const result: number[] = [];
+  for (let y = 0; y < outH; y++) {
+    const rowS = leftCols.map((col) => col[y]);
+    const rowD = rightCols.map((col) => col[y]);
+    result.push(...cdf75Inverse1D(rowS, rowD, outW));
+  }
+
+  return result;
+}
+
+/**
  * Bilinear upscale
  */
 function bilinearUpscale(
@@ -239,8 +327,8 @@ export function calculateSubbandDimensions(
 /**
  * Decode ITW V1 (0x0300) format image
  *
- * Currently extracts LL band and upscales to full resolution.
- * Full wavelet reconstruction not yet implemented.
+ * Uses CDF 7/5 inverse wavelet transform with available subbands.
+ * Currently extracts LL3 and LH2 (direct storage) for partial reconstruction.
  */
 export function decodeItwV1(buffer: Buffer): ItwV1DecodeResult {
   const header = parseItwV1Header(buffer);
@@ -256,44 +344,70 @@ export function decodeItwV1(buffer: Buffer): ItwV1DecodeResult {
     filterType: compressedData[2],
   };
 
-  // Calculate final LL subband size
-  let llW = header.width;
-  let llH = header.height;
+  // Calculate dimensions for each level
+  const dims: { full: [number, number]; ll: [number, number] }[] = [];
+  let w = header.width;
+  let h = header.height;
   for (let i = 0; i < metadata.levels; i++) {
-    llW = Math.ceil(llW / 2);
-    llH = Math.ceil(llH / 2);
+    const llW = Math.ceil(w / 2);
+    const llH = Math.ceil(h / 2);
+    dims.push({ full: [w, h], ll: [llW, llH] });
+    w = llW;
+    h = llH;
   }
+
+  const llW = w;
+  const llH = h;
   const llSize = llW * llH;
+
+  // Calculate LH2 size (Level 2)
+  const lh2Size = dims[2] ? dims[2].ll[0] * (dims[2].full[1] - dims[2].ll[1]) : 0;
 
   // Find zlib streams
   const streams = findZlibStreams(compressedData);
 
-  // Find LL stream: matches size and has highest average (actual pixel values)
-  const candidates = streams.filter((s) => s.size === llSize);
-  if (candidates.length === 0) {
+  // Find LL stream: matches size and has highest average
+  const llCandidates = streams.filter((s) => s.size === llSize);
+  if (llCandidates.length === 0) {
     throw new Error(`Could not find LL stream (expected size ${llSize})`);
   }
+  const llStream = llCandidates.reduce((a, b) => (a.average > b.average ? a : b));
+  const ll3 = Array.from(llStream.data).map(Number);
 
-  const llStream = candidates.reduce((a, b) => (a.average > b.average ? a : b));
+  // Find LH2 stream: matches size and has low average (detail coefficients)
+  let lh2: number[] | null = null;
+  if (lh2Size > 0) {
+    const lh2Candidates = streams.filter((s) => s.size === lh2Size && s.average < 50);
+    if (lh2Candidates.length > 0) {
+      const lh2Stream = lh2Candidates[0];
+      lh2 = Array.from(lh2Stream.data).map((v) => (v > 127 ? v - 256 : v));
+    }
+  }
 
-  // Normalize LL values to 0-255
-  const llData = Array.from(llStream.data);
-  const minV = Math.min(...llData);
-  const maxV = Math.max(...llData);
+  // Reconstruct using CDF 7/5 inverse transform
+  let current = ll3;
+
+  for (let lvl = metadata.levels - 1; lvl >= 0; lvl--) {
+    const [outW, outH] = dims[lvl].full;
+    const lh = lvl === 2 ? lh2 : null;
+
+    current = cdf75Inverse2D(current, lh, null, null, outW, outH);
+  }
+
+  // Normalize to 0-255
+  const minV = Math.min(...current);
+  const maxV = Math.max(...current);
   const rangeV = maxV - minV || 1;
-  const normalized = llData.map((v) => ((v - minV) * 255) / rangeV);
-
-  // Upscale to full resolution
-  const upscaled = bilinearUpscale(normalized, llW, llH, header.width, header.height);
+  const normalized = current.map((v) => ((v - minV) * 255) / rangeV);
 
   // Convert to Buffer
-  const pixels = Buffer.from(upscaled.map((v) => Math.max(0, Math.min(255, Math.round(v)))));
+  const pixels = Buffer.from(normalized.map((v) => Math.max(0, Math.min(255, Math.round(v)))));
 
   return {
     header,
     metadata,
     pixels,
-    llOnly: true,
+    llOnly: !lh2,
   };
 }
 
