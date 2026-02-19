@@ -364,3 +364,26 @@ This produces pairs (c1, c2) where c1 >= c2 >= 0.
 - Need dequantization formula from decompiled code
 - Verify CDF 7/5 lifting implementation
 - Map all 4 levels of detail bands
+
+## Working Decoder (LL-only)
+
+### Stream 16 = LL4
+- Dimensions: 20×15 = 300 bytes
+- Range: 21-80 (needs rescaling to 0-255)
+- Mean: 49.4
+
+### Simple Decoder
+For basic decoding (blurry but recognizable):
+1. Extract stream 16 (LL4)
+2. Rescale from [min, max] to [0, 255]
+3. Bilinear upscale to target dimensions
+
+### Confirmed Working
+- LL4 extraction and visualization ✓
+- Bilinear upscale produces recognizable image ✓
+- Image appears to be BMW technical diagram ✓
+
+### TODO
+- Implement proper CDF 5/3 inverse wavelet
+- Decode detail bands (streams 0-15)
+- Apply dequantization with per-subband steps
