@@ -307,3 +307,30 @@ To identify LL bands, check statistics:
 
 Stream 16 stats: mean=49.4, range=21-80 → **LL band confirmed**
 Stream 4 stats: mean=8.8, range=0-173 → **Detail band (sparse)**
+
+## Metadata Block (Before Zlib Streams)
+
+The ITW V1 format has a metadata block between the header (offset 18) and the first zlib stream.
+
+For 26.ITW (316×238):
+- Metadata: 77 bytes (offsets 18-94)
+- First zlib stream starts at offset 95
+
+### Raw Metadata (hex)
+```
+00 04 01 fa 02 00 08 01 20 02 41 00 0c 01 20 02
+be 00 2d 00 e0 05 32 00 37 00 e0 05 d6 00 0a 00
+e0 03 6e 00 75 00 e0 08 70 00 7f 00 e0 0e e2 00
+2b 00 e0 05 1f 00 31 00 e0 0a f0 00 4e 00 e0 0d
+cb 00 15 00 e0 07 36 0d c2 14 6b 00 f4
+```
+
+### Possible Interpretation (Big Endian)
+- Offset 0: 0x0004 = 4 (wavelet levels?)
+- Offset 2: 0x01FA = 506 (some size/offset)
+- Rest: Per-level or per-subband parameters
+
+### TODO
+- [ ] Reverse-engineer metadata format
+- [ ] Map parameters to quantization tables
+- [ ] Understand relationship to stream offsets
