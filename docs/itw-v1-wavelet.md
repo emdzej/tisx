@@ -275,3 +275,35 @@ Apply 1D transform first on columns (vertical), then on rows (horizontal).
 - CDF 7/5: Cohen-Daubechies-Feauveau biorthogonal wavelet
 - Combinatorial Number System (Fischer coding)
 - Ghidra decompilation of tis.exe
+
+## Stream Mapping (Confirmed)
+
+Based on analysis of 26.ITW (316×238):
+
+| Stream | Size | Content | Dimensions |
+|--------|------|---------|------------|
+| 16 | 300 | **LL4 (deepest)** | 20×15 |
+| 4 | 1200 | Detail band (sparse) | 40×30 |
+| 0 | 2380 | LH1 RLE positions | - |
+| 1 | 996 | LH1 values | - |
+| 2 | 2528 | HL1 RLE positions | - |
+| 3 | 1470 | HL1 values | - |
+
+### Dimension Hierarchy
+
+```
+Level 4: 20×15   (LL4 = stream 16, 300 bytes)
+Level 3: 40×30   (LL3 = 1200 pixels)
+Level 2: 79×60   (LL2 = 4740 pixels)
+Level 1: 158×119 (LL1 = 18802 pixels)
+Level 0: 316×238 (Full image)
+```
+
+### LL Band Identification
+
+To identify LL bands, check statistics:
+- **LL bands**: Higher mean (~50), narrow range (e.g., 21-80)
+- **Detail bands**: Low mean (~10), wide range, mostly zeros (sparse)
+
+Stream 16 stats: mean=49.4, range=21-80 → **LL band confirmed**
+Stream 4 stats: mean=8.8, range=0-173 → **Detail band (sparse)**
