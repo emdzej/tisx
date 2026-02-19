@@ -1,5 +1,6 @@
 /**
- * ITW V1 (0x0300) Wavelet Decoder with detail bands
+ * ITW V1 (0x0300) CDF 5/3 Wavelet Decoder
+ * Full multi-level reconstruction with detail bands
  */
 import * as zlib from 'zlib';
 
@@ -7,10 +8,32 @@ export interface ItwHeader {
   magic: string; flags: number; width: number; height: number;
   formatVersion: number; compressedSize: number;
 }
-
 export interface ItwV1Result { width: number; height: number; pixels: Uint8Array; }
 export interface DecodeOptions { mode?: 'bilinear' | 'cdf53' | 'full'; }
 
+// Fischer decode: 2-bit mode + 6-bit value
+function fischer(b: number): number {
+  const mode = b >> 6, val = b & 0x3F;
+  return [val, -val, val + 64, -(val + 64)][mode];
+}
+
+// RLE decode: high bit = place + skip, low = skip only
+function decodeRle(rle: Buffer, vals: Buffer, size: number): number[] {
+  const coeffs = new Array(size).fill(0);
+  let pos = 0, vi = 0;
+  for (const b of rle) {
+    if (pos >= size) break;
+    if (b >= 128) {
+      if (vi < vals.length) coeffs[pos] = fischer(vals[vi++]);
+      pos += (b & 0x7F) + 1;
+    } else {
+      pos += b + 1;
+    }
+  }
+  return coeffs;
+}
+
+// Bilinear upscale
 function bilinear(src: number[], sw: number, sh: number, dw: number, dh: number): number[] {
   const result: number[] = [];
   for (let y = 0; y < dh; y++) {
@@ -27,58 +50,77 @@ function bilinear(src: number[], sw: number, sh: number, dw: number, dh: number)
   return result;
 }
 
-function fischer(b: number): number {
-  const mode = b >> 6, val = b & 0x3F;
-  return [val, -val, val+64, -(val+64)][mode];
-}
-
-function decodeRle(rle: Buffer, vals: Buffer, size: number): number[] {
-  const coeffs = new Array(size).fill(0);
-  let pos = 0, vi = 0;
-  for (const b of rle) {
-    if (pos >= size) break;
-    if (b >= 128) {
-      if (vi < vals.length) coeffs[pos] = fischer(vals[vi++]);
-      pos += (b & 0x7F) + 1;
-    } else {
-      pos += b + 1;
-    }
-  }
-  return coeffs;
-}
-
-function cdf53Row(s: number[], d: number[]): number[] {
-  const ns = s.length, nd = d.length;
-  if (ns === 0) return [];
-  const even = s.map((v, i) => nd ? v - (d[Math.max(0,i-1)] + d[Math.min(i,nd-1)])/4 : v);
-  const odd = nd ? d.map((v, i) => v + (even[i] + even[Math.min(i+1,ns-1)])/2) : [];
-  const out = new Array(ns + nd).fill(0);
-  for (let i = 0; i < ns; i++) out[2*i] = even[i];
-  for (let i = 0; i < nd; i++) out[2*i+1] = odd[i];
+// CDF 5/3 1D synthesis (inverse lifting)
+function synth1D(low: number[], high: number[]): number[] {
+  const nLow = low.length, nHigh = high.length;
+  if (nLow === 0) return [];
+  if (nHigh === 0) return [...low];
+  
+  // Update step
+  const even = low.map((v, i) => {
+    const hL = high[Math.max(0, i - 1)];
+    const hR = high[Math.min(i, nHigh - 1)];
+    return v - (hL + hR) / 4;
+  });
+  
+  // Predict step
+  const odd = high.map((v, i) => {
+    const eL = even[i];
+    const eR = even[Math.min(i + 1, nLow - 1)];
+    return v + (eL + eR) / 2;
+  });
+  
+  // Interleave
+  const out = new Array(nLow + nHigh).fill(0);
+  for (let i = 0; i < nLow; i++) out[2 * i] = even[i];
+  for (let i = 0; i < nHigh; i++) out[2 * i + 1] = odd[i];
   return out;
 }
 
-function cdf53_2d(ll: number[], lh: number[]|null, hl: number[]|null, hh: number[]|null,
-                  llW: number, llH: number, outW: number, outH: number): number[] {
-  const hlW = Math.floor(outW / 2), lhH = Math.floor(outH / 2);
+// Synthesize one wavelet level
+function synthLevel(ll: number[], lh: number[] | null, hl: number[] | null, hh: number[] | null,
+                    llW: number, llH: number, outW: number, outH: number): number[] {
+  const hlW = outW - llW, lhH = outH - llH;
+  
+  // Pad arrays
+  const pad = (arr: number[] | null, len: number) => {
+    if (!arr) return new Array(len).fill(0);
+    const r = [...arr];
+    while (r.length < len) r.push(0);
+    return r.slice(0, len);
+  };
+  
+  const llPad = pad(ll, llW * llH);
+  const lhPad = pad(lh, llW * lhH);
+  const hlPad = pad(hl, hlW * llH);
+  const hhPad = pad(hh, hlW * lhH);
+  
+  // Rows: [LL|HL] -> L, [LH|HH] -> H
   const L: number[][] = [];
   for (let y = 0; y < llH; y++) {
-    const s = ll.slice(y*llW, (y+1)*llW);
-    const d = hl ? hl.slice(y*hlW, (y+1)*hlW) : new Array(hlW).fill(0);
-    L.push(cdf53Row(s, d).slice(0, outW));
+    const rowLL = llPad.slice(y * llW, (y + 1) * llW);
+    const rowHL = hlPad.slice(y * hlW, (y + 1) * hlW);
+    const row = synth1D(rowLL, rowHL);
+    L.push(row.slice(0, outW).concat(new Array(Math.max(0, outW - row.length)).fill(0)));
   }
+  
   const H: number[][] = [];
   for (let y = 0; y < lhH; y++) {
-    const s = lh ? lh.slice(y*llW, (y+1)*llW) : new Array(llW).fill(0);
-    const d = hh ? hh.slice(y*hlW, (y+1)*hlW) : new Array(hlW).fill(0);
-    H.push(cdf53Row(s, d).slice(0, outW));
+    const rowLH = lhPad.slice(y * llW, (y + 1) * llW);
+    const rowHH = hhPad.slice(y * hlW, (y + 1) * hlW);
+    const row = synth1D(rowLH, rowHH);
+    H.push(row.slice(0, outW).concat(new Array(Math.max(0, outW - row.length)).fill(0)));
   }
+  
+  // Columns
   const out = new Array(outW * outH).fill(0);
   for (let x = 0; x < outW; x++) {
-    const s = L.map(row => row[x] ?? 0);
-    const d = H.map(row => row[x] ?? 0);
-    const col = cdf53Row(s, d);
-    for (let y = 0; y < Math.min(outH, col.length); y++) out[y*outW + x] = col[y];
+    const colL = L.map(row => row[x] ?? 0);
+    const colH = H.map(row => row[x] ?? 0);
+    const col = synth1D(colL, colH);
+    for (let y = 0; y < Math.min(outH, col.length); y++) {
+      out[y * outW + x] = col[y];
+    }
   }
   return out;
 }
@@ -109,58 +151,58 @@ export function parseItwHeader(data: Buffer): ItwHeader {
 export function decodeItwV1(data: Buffer, options: DecodeOptions = {}): ItwV1Result {
   const { mode = 'bilinear' } = options;
   const header = parseItwHeader(data);
-  if (header.magic !== 'ITW_') throw new Error(`Not ITW`);
-  if (header.formatVersion !== 0x0300) throw new Error(`Not V1`);
+  if (header.magic !== 'ITW_') throw new Error('Not ITW');
+  if (header.formatVersion !== 0x0300) throw new Error('Not V1');
 
-  const { width, height } = header;
+  const { width: w, height: h } = header;
   const streams = extractZlibStreams(data.subarray(18, 18 + header.compressedSize));
 
-  // Dimension pyramid
-  const dims: [number, number][] = [[width, height]];
-  for (let i = 0; i < 4; i++) dims.push([Math.ceil(dims[i][0]/2), Math.ceil(dims[i][1]/2)]);
+  // Dimension pyramid: [full, L1, L2, L3, L4]
+  const dims: [number, number][] = [[w, h]];
+  for (let i = 0; i < 4; i++) dims.push([Math.ceil(dims[i][0] / 2), Math.ceil(dims[i][1] / 2)]);
   const [l1W, l1H] = dims[1], [l2W, l2H] = dims[2], [l3W, l3H] = dims[3], [l4W, l4H] = dims[4];
 
-  // Find LL4
-  const ll4Size = l4W * l4H;
-  const ll4Stream = streams.find(s => s.length === ll4Size);
-  if (!ll4Stream) throw new Error(`LL4 not found`);
-
+  // Find and normalize LL4
+  const ll4Stream = streams.find(s => s.length === l4W * l4H);
+  if (!ll4Stream) throw new Error('LL4 not found');
   const ll4 = Array.from(ll4Stream);
-  let min = Infinity, max = -Infinity;
-  for (const v of ll4) { if (v < min) min = v; if (v > max) max = v; }
+  let min = Math.min(...ll4), max = Math.max(...ll4);
   const ll4n = ll4.map(v => (v - min) * 255 / (max - min || 1));
 
   let pixels: number[];
 
   if (mode === 'bilinear') {
-    pixels = bilinear(ll4n, l4W, l4H, width, height);
+    pixels = bilinear(ll4n, l4W, l4H, w, h);
   } else if (mode === 'cdf53') {
-    let ll3 = cdf53_2d(ll4n, null, null, null, l4W, l4H, l3W, l3H);
-    let ll2 = cdf53_2d(ll3, null, null, null, l3W, l3H, l2W, l2H);
-    let ll1 = cdf53_2d(ll2, null, null, null, l2W, l2H, l1W, l1H);
-    pixels = cdf53_2d(ll1, null, null, null, l1W, l1H, width, height);
+    let ll3 = synthLevel(ll4n, null, null, null, l4W, l4H, l3W, l3H);
+    let ll2 = synthLevel(ll3, null, null, null, l3W, l3H, l2W, l2H);
+    let ll1 = synthLevel(ll2, null, null, null, l2W, l2H, l1W, l1H);
+    pixels = synthLevel(ll1, null, null, null, l1W, l1H, w, h);
   } else {
-    // Full mode with L1 details
-    let ll3 = cdf53_2d(ll4n, null, null, null, l4W, l4H, l3W, l3H);
-    let ll2 = cdf53_2d(ll3, null, null, null, l3W, l3H, l2W, l2H);
-    let ll1 = cdf53_2d(ll2, null, null, null, l2W, l2H, l1W, l1H);
+    // Full mode with L1 and L2 details
+    let ll3 = synthLevel(ll4n, null, null, null, l4W, l4H, l3W, l3H);
+    let ll2 = synthLevel(ll3, null, null, null, l3W, l3H, l2W, l2H);
     
-    // Decode L1 details from S0/S1 (LH1) and S2/S3 (HL1)
-    const l1Size = l1W * l1H;
-    const lh1 = decodeRle(streams[0], streams[1], l1Size).map(v => v * 8);
-    const hl1 = decodeRle(streams[2], streams[3], l1Size).map(v => v * 8);
+    // L2 details (Q=4)
+    const lh2 = decodeRle(streams[6], streams[7], l2W * (l1H - l2H)).map(v => v * 4);
+    const hl2 = decodeRle(streams[8], streams[9], (l1W - l2W) * l2H).map(v => v * 4);
+    let ll1 = synthLevel(ll2, lh2, hl2, null, l2W, l2H, l1W, l1H);
     
-    pixels = cdf53_2d(ll1, lh1, hl1, null, l1W, l1H, width, height);
+    // L1 details (Q=8)
+    const lh1 = decodeRle(streams[0], streams[1], l1W * (h - l1H)).map(v => v * 8);
+    const hl1 = decodeRle(streams[2], streams[3], (w - l1W) * l1H).map(v => v * 8);
+    const hh1 = decodeRle(streams[4], streams[5], (w - l1W) * (h - l1H)).map(v => v * 8);
+    pixels = synthLevel(ll1, lh1, hl1, hh1, l1W, l1H, w, h);
   }
 
   // Normalize output
   min = Infinity; max = -Infinity;
   for (const p of pixels) { if (p < min) min = p; if (p > max) max = p; }
   const range = max - min || 1;
-  const result = new Uint8Array(width * height);
+  const result = new Uint8Array(w * h);
   for (let i = 0; i < pixels.length; i++) {
     result[i] = Math.max(0, Math.min(255, Math.round((pixels[i] - min) * 255 / range)));
   }
 
-  return { width, height, pixels: result };
+  return { width: w, height: h, pixels: result };
 }
