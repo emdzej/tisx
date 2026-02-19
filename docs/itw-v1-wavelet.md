@@ -1,62 +1,75 @@
-# ITW V1 Wavelet Format
+# ITW V1 (0x0300) Format Documentation
 
 ## File Structure
+
 ```
 Offset  Size  Description
-0x00    4     Magic "ITW_"
-0x04    2     Flags (0x0100)
-0x06    2     Width (BE)
-0x08    2     Height (BE)
-0x0A    2     Unknown
-0x0C    2     Format version (0x0300 = V1, 0x0400 = V2)
-0x0E    4     Compressed size (BE)
-0x12    N     Compressed payload (metadata + zlib streams)
+------  ----  -----------
+0       4     Magic: "ITW_"
+4       2     Flags (BE)
+6       2     Width (BE)
+8       2     Height (BE)
+10      2     Unknown
+12      2     Format version: 0x0300 for V1
+14      4     Compressed payload size (BE)
+18      N     Compressed payload (zlib streams)
 ```
 
-## Compressed Payload
-1. **Metadata block** (~77 bytes) - stream references and params
-2. **Zlib streams** (19 streams for test file)
+## Wavelet Structure
 
-## Stream Organization
-- **Stream 16**: LL4 band (lowest resolution, 20×15 for 316×238 image)
-- **Streams 0-15, 17-18**: Detail bands (Fischer + RLE encoded)
+4-level CDF 5/3 wavelet decomposition:
+- **Level 4** (deepest): LL4 = ~(W/16)×(H/16)
+- **Level 3**: ~(W/8)×(H/8)
+- **Level 2**: ~(W/4)×(H/4)
+- **Level 1**: ~(W/2)×(H/2)
 
-## LL4 Band
-- Dimensions: ceil(width/16) × ceil(height/16)
-- Values: Raw bytes, needs rescaling from [min, max] to [0, 255]
-- Test file range: 21-80 (mean: 49.4)
+## Zlib Streams
 
-## Wavelet Transform
-- **Type**: CDF 5/3 (biorthogonal, used in JPEG 2000 lossless)
-- **Levels**: 4 decomposition levels
-- **Lifting scheme**:
-  - Predict: `d[n] = x[2n+1] - floor((x[2n] + x[2n+2])/2)`
-  - Update: `s[n] = x[2n] + floor((d[n-1] + d[n] + 2)/4)`
+Typically 19 streams in the payload:
+- **S0-S15**: RLE + Fischer encoded detail coefficients (L1/L2 sparse)
+- **S16**: LL4 (deepest DC coefficients, direct values)
+- **S17-S18**: Additional metadata/coefficients
 
-## Quantization Steps (per subband)
+### Finding LL4
+Stream with size matching `ceil(W/16) × ceil(H/16)` contains LL4.
+
+## Decoding
+
+### RLE Format (even streams)
 ```
-Level  LH   HL   HH
-1      8    8    8
-2      4    4    4
-3      2    2    2
-4      1    1    1
+b >= 128: Place coefficient, skip (b & 0x7F) + 1 positions
+b < 128:  Skip b + 1 positions (no coefficient)
 ```
 
-## Current Decoder Status
+### Fischer Encoding (odd streams)
+```
+Mode 0 (00xxxxxx): +0 to +63
+Mode 1 (01xxxxxx): -0 to -63
+Mode 2 (10xxxxxx): +64 to +127
+Mode 3 (11xxxxxx): -64 to -127
+```
 
-### Working ✅
-- File structure parsing
-- Zlib stream extraction
-- LL4 extraction and rescaling
-- Bilinear upscale (produces recognizable but blurry image)
+## Implementation
 
-### TODO
-- CDF 5/3 inverse wavelet (has artifacts without detail bands)
-- Fischer decode for detail coefficients
-- RLE decode for sparse coefficients
-- Full reconstruction with all subbands
+Two decode modes:
+1. **bilinear** (default): Direct bilinear upscale from LL4 - smooth, fast
+2. **cdf53**: CDF 5/3 wavelet reconstruction - LL-only pyramid
 
-## Test Results
-- **Bilinear upscale**: Recognizable image, blurry (best for LL-only)
-- **Haar wavelet**: Blocky/pixelated
-- **CDF 5/3 wavelet**: Produces lines/artifacts without detail bands
+Both produce recognizable output. Full detail band reconstruction requires:
+- Correct stream→subband mapping
+- Quantization step dequantization (8,8,4,4,4,2,2,2,1,1,1)
+- Proper subband dimension handling
+
+## Example Usage
+
+```bash
+tisx decode image.itw              # bilinear mode
+tisx decode image.itw --mode=cdf53 # CDF 5/3 mode
+tisx info image.itw                # show file info
+```
+
+## Test Files
+
+BMW TIS graphics directory: `/Users/emdzej/Documents/tis/GRAFIK/`
+- Small: `1/03/95/26.ITW` (316×238, 8KB)
+- Large: `1/09/87/90.ITW` (632×711, 99KB)
