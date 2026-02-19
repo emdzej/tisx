@@ -82,3 +82,27 @@ This suggests RLE-compressed detail coefficients with run lengths stored separat
 2. Parse metadata block to get stream→subband mapping
 3. Apply dequantization with correct steps per subband
 4. Implement proper CDF 5/3 inverse wavelet with all bands
+
+## Detail Coefficient Encoding
+
+### Confirmed: Zigzag Encoding
+Detail streams use zigzag encoding for signed values:
+```
+decode(n) = (n >> 1) ^ -(n & 1)
+```
+This maps: 0→0, 1→-1, 2→1, 3→-2, 4→2, ...
+
+### Stream S4 Analysis (40×30 = 1200 bytes)
+- Contains edge/detail data (not low-pass)
+- 42% zeros (sparse)
+- Mean 8.8, range 0-173
+- Zigzag decoded: range -87 to +86
+- Visualized: shows horizontal edges consistent with LH subband
+
+### Integration Challenge
+CDF 5/3 inverse wavelet produces artifacts when only LL is available.
+Detail bands need to be correctly placed in the wavelet domain.
+
+### Current Working Approach
+Bilinear upscale from LL4 (stream 16) produces recognizable but blurry images.
+This is the fallback for now until detail reconstruction is implemented.
