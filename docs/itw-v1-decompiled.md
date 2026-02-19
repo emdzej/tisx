@@ -106,3 +106,45 @@ Detail bands need to be correctly placed in the wavelet domain.
 ### Current Working Approach
 Bilinear upscale from LL4 (stream 16) produces recognizable but blurry images.
 This is the fallback for now until detail reconstruction is implemented.
+
+## RLE + Fischer Decode (WORKING!)
+
+### RLE Format
+Each byte in RLE stream:
+- `b >= 128`: Place coefficient at current position, skip `(b & 0x7F) + 1`
+- `b < 128`: Skip `b + 1` positions (no coefficient)
+
+### Fischer Encoding
+Values are encoded in 1 byte with sign in high 2 bits:
+```
+Mode 0 (00xxxxxx): Positive 0-63
+Mode 1 (01xxxxxx): Negative 0-63  
+Mode 2 (10xxxxxx): Positive 64-127
+Mode 3 (11xxxxxx): Negative 64-127
+```
+Decode: `val = b & 0x3F; if mode==1: val=-val; if mode>=2: val += 64 * sign`
+
+### Stream Pair Decode
+```python
+def decode_rle(rle, values, target_size):
+    output = [0.0] * target_size
+    pos = val_idx = 0
+    for b in rle:
+        if b >= 128:
+            output[pos] = values[val_idx]
+            val_idx += 1
+            pos += (b & 0x7F) + 1
+        else:
+            pos += b + 1
+    return output
+```
+
+### Confirmed Stream Mappings
+- S0+S1: LH1 (82 non-zero coefficients at 158×119)
+- S2+S3: HL1 (98 non-zero)
+- S6+S7: HH1 (32 non-zero)
+- S16: LL4 (direct values, 20×15)
+
+### Reconstruction Status
+Haar wavelet with detail bands produces blocky but recognizable images.
+Full CDF 5/3 reconstruction needs more work.
