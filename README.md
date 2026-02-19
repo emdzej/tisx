@@ -1,71 +1,49 @@
-# tisx
+# tisx - TIS Image Format Decoder
 
-BMW TIS image format decompressor & tools. Supports both ITW format variants:
+Decoder for BMW TIS (Technical Information System) image formats.
 
-- **V1 (0x0300)** — Wavelet compression (CDF 7/5 biorthogonal)
-- **V2 (0x0400)** — LZW + PackBits RLE compression
+## Supported Formats
 
-**Repo:** <https://github.com/emdzej/tisx>
+| Format | Magic | Status |
+|--------|-------|--------|
+| ITW V1 | 0x0300 | ✅ Working (LL-only, blurry) |
+| ITW V2 | 0x0400 | 🔄 Planned |
 
-## Install
-
-```bash
-pnpm install
-pnpm run build
-```
-
-## CLI usage
+## Installation
 
 ```bash
-# Decode ITW to raw grayscale
-pnpm exec decomp-itw samples/itw_samples/34.ITW out.raw --format raw
-
-# Decode to PGM (8bpp only)
-pnpm exec decomp-itw samples/itw_samples/34.ITW out.pgm --format pgm
-
-# Decode to PNG (8bpp only)
-pnpm exec decomp-itw samples/itw_samples/34.ITW out.png --format png
+npm install -g tisx
 ```
 
-The CLI auto-detects the format variant (V1 vs V2) and uses the appropriate decoder.
-
-## Format support status
-
-| Format | Type | Status |
-|--------|------|--------|
-| V1 (0x0300) | Wavelet | ⚠️ LL-only (low-frequency, blurry) |
-| V2 (0x0400) | LZW+RLE | ✅ Full support |
-
-V1 wavelet decoder currently extracts only the LL subband and upscales. Full wavelet reconstruction is WIP.
-
-## ITW format notes
-
-### V1 (0x0300) — Wavelet
-
-- Header: 18 bytes (magic, dimensions BE, bit depth, format type, compressed size)
-- Compression: 4-level CDF 7/5 biorthogonal wavelet transform
-- Subbands: 13 total (LL, LH×4, HL×4, HH×4)
-- Coefficient encoding: zlib-compressed streams with significance coding
-
-See [`docs/itw-v1-wavelet.md`](docs/itw-v1-wavelet.md) for reverse engineering notes.
-
-### V2 (0x0400) — LZW
-
-- Header parsing and block table logic in `src/decompressors/itw-lzw.ts`
-- Multi-block support with auto-detection of LZW parameters
-- PackBits RLE post-processing when needed
-
-See [`docs/itw-findings.md`](docs/itw-findings.md) for details.
-
-## Development
+## Usage
 
 ```bash
-pnpm run build
+# Show file info
+tisx info image.itw
+
+# Decode to PNG
+tisx decode image.itw
+tisx decode image.itw output.png
 ```
 
-## Related
+## ITW V1 Format
 
-- Tracking issue: <https://github.com/emdzej/marek-workspace/issues/21>
+The ITW V1 format uses wavelet compression with CDF 5/3 transform:
+- 4 decomposition levels
+- Stream 16 contains LL4 (lowest resolution low-pass band)
+- Detail streams use zigzag encoding
+- Current decoder uses bilinear upscale from LL4
+
+### Output Quality
+
+The current decoder produces **blurry but recognizable** images.
+Full quality requires decoding detail bands (work in progress).
+
+## Documentation
+
+See `docs/` for detailed format documentation:
+- `itw-v1-wavelet.md` - File structure and wavelet format
+- `itw-v1-decompiled.md` - Reverse engineering notes
 
 ## License
 
