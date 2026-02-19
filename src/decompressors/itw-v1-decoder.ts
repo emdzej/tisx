@@ -1,9 +1,9 @@
 /**
  * ITW V1 (0x0300) Wavelet Decoder
  * 
- * Supports two modes:
- * - Bilinear: Fast, blurry output from LL4 only
- * - Wavelet: Uses detail bands for sharper output (WIP)
+ * Modes:
+ * - bilinear: Fast, smooth upscale from LL4 (default, best quality)
+ * - cdf53: CDF 5/3 reconstruction (experimental)
  */
 
 import * as zlib from 'zlib';
@@ -24,94 +24,73 @@ export interface ItwV1Result {
 }
 
 export interface DecodeOptions {
-  mode?: 'bilinear' | 'wavelet';
-  detailScale?: number;
+  mode?: 'bilinear' | 'cdf53';
 }
 
-// Fischer decode: 2-bit sign/range + 6-bit value
-function fischerDecode(b: number): number {
-  const mode = b >> 6;
-  const val = b & 0x3F;
-  switch (mode) {
-    case 0: return val;
-    case 1: return -val;
-    case 2: return val + 64;
-    case 3: return -(val + 64);
-    default: return 0;
-  }
-}
-
-// RLE decode: high bit = place coeff + skip, low = skip only
-function decodeRle(rle: number[], values: number[], targetSize: number): number[] {
-  const output = new Array(targetSize).fill(0);
-  let pos = 0;
-  let valIdx = 0;
-  
-  for (const b of rle) {
-    if (pos >= targetSize) break;
-    
-    if (b >= 128) {
-      if (valIdx < values.length) {
-        output[pos] = values[valIdx++];
-      }
-      pos += (b & 0x7F) + 1;
-    } else {
-      pos += b + 1;
-    }
-  }
-  
-  return output;
-}
-
-function bilinearUpscale(
-  src: number[], srcW: number, srcH: number,
-  dstW: number, dstH: number
-): number[] {
+// Bilinear upscale - best quality for LL-only decode
+function bilinear(src: number[], sw: number, sh: number, dw: number, dh: number): number[] {
   const result: number[] = [];
-  
-  for (let y = 0; y < dstH; y++) {
-    for (let x = 0; x < dstW; x++) {
-      const srcX = dstW > 1 ? x * (srcW - 1) / (dstW - 1) : 0;
-      const srcY = dstH > 1 ? y * (srcH - 1) / (dstH - 1) : 0;
-      
-      const x0 = Math.floor(srcX), y0 = Math.floor(srcY);
-      const x1 = Math.min(x0 + 1, srcW - 1), y1 = Math.min(y0 + 1, srcH - 1);
-      const fx = srcX - x0, fy = srcY - y0;
-      
-      const v00 = src[y0 * srcW + x0], v10 = src[y0 * srcW + x1];
-      const v01 = src[y1 * srcW + x0], v11 = src[y1 * srcW + x1];
-      
-      result.push(
-        v00 * (1 - fx) * (1 - fy) + v10 * fx * (1 - fy) +
-        v01 * (1 - fx) * fy + v11 * fx * fy
-      );
+  for (let y = 0; y < dh; y++) {
+    for (let x = 0; x < dw; x++) {
+      const sx = dw > 1 ? x * (sw - 1) / (dw - 1) : 0;
+      const sy = dh > 1 ? y * (sh - 1) / (dh - 1) : 0;
+      const x0 = Math.floor(sx), y0 = Math.floor(sy);
+      const x1 = Math.min(x0 + 1, sw - 1), y1 = Math.min(y0 + 1, sh - 1);
+      const fx = sx - x0, fy = sy - y0;
+      const v00 = src[y0 * sw + x0], v10 = src[y0 * sw + x1];
+      const v01 = src[y1 * sw + x0], v11 = src[y1 * sw + x1];
+      result.push(v00 * (1 - fx) * (1 - fy) + v10 * fx * (1 - fy) + v01 * (1 - fx) * fy + v11 * fx * fy);
     }
   }
-  
   return result;
 }
 
-// 2D Haar inverse wavelet
-function haarInverse2D(
-  ll: number[], lh: number[] | null, hl: number[] | null, hh: number[] | null,
-  outW: number, outH: number
-): number[] {
-  const llW = Math.ceil(outW / 2), llH = Math.ceil(outH / 2);
-  const result = new Array(outW * outH).fill(0);
+// CDF 5/3 inverse 1D lifting
+function cdf53Inv1D(s: number[], d: number[]): number[] {
+  const nS = s.length, nD = d.length, nOut = nS + nD;
+  if (nS === 0) return [];
   
-  const get = (arr: number[] | null, idx: number) => 
-    arr && idx < arr.length ? arr[idx] : 0;
+  const even = new Array(nS).fill(0), odd = new Array(nD).fill(0);
   
+  for (let i = 0; i < nS; i++) {
+    const dLeft = nD > 0 ? d[Math.max(0, i - 1)] : 0;
+    const dRight = nD > 0 ? d[Math.min(i, nD - 1)] : 0;
+    even[i] = s[i] - (dLeft + dRight) / 4;
+  }
+  
+  for (let i = 0; i < nD; i++) {
+    const eLeft = even[i];
+    const eRight = even[Math.min(i + 1, nS - 1)];
+    odd[i] = d[i] + (eLeft + eRight) / 2;
+  }
+  
+  const result = new Array(nOut).fill(0);
+  for (let i = 0; i < nS; i++) result[2 * i] = even[i];
+  for (let i = 0; i < nD; i++) result[2 * i + 1] = odd[i];
+  return result;
+}
+
+// CDF 5/3 inverse 2D (LL only)
+function cdf53Inv2D_LLonly(ll: number[], llW: number, llH: number, outW: number, outH: number): number[] {
+  const hlW = Math.floor(outW / 2), lhH = Math.floor(outH / 2);
+  
+  // Inverse rows (LL → L)
+  const L: number[][] = [];
   for (let y = 0; y < llH; y++) {
-    for (let x = 0; x < llW; x++) {
-      const idx = y * llW + x;
-      const a = get(ll, idx), b = get(lh, idx), c = get(hl, idx), d = get(hh, idx);
-      const ox = 2 * x, oy = 2 * y;
-      
-      if (oy < outH && ox < outW) result[oy * outW + ox] = a + b + c + d;
-      if (oy < outH && ox + 1 < outW) result[oy * outW + ox + 1] = a + b - c - d;
-      if (oy + 1 < outH && ox < outW) result[(oy + 1) * outW + ox] = a - b + c - d;
-      if (oy + 1 < outH && ox + 1 < outW) result[(oy + 1) * outW + ox + 1] = a - b - c + d;
+    const rowS = ll.slice(y * llW, (y + 1) * llW);
+    const rowD = new Array(hlW).fill(0);
+    const rowOut = cdf53Inv1D(rowS, rowD);
+    L.push(rowOut.slice(0, outW));
+  }
+  
+  // Inverse columns
+  const result = new Array(outW * outH).fill(0);
+  for (let x = 0; x < outW; x++) {
+    const colS = L.map(row => row[x] ?? 0);
+    const colD = new Array(lhH).fill(0);
+    const colOut = cdf53Inv1D(colS, colD);
+    for (let y = 0; y < outH; y++) {
+      result[y * outW + x] = colOut[y] ?? 0;
     }
   }
   
@@ -121,7 +100,6 @@ function haarInverse2D(
 function extractZlibStreams(data: Buffer): Buffer[] {
   const streams: Buffer[] = [];
   let pos = 0;
-  
   while (pos < data.length - 2) {
     if (data[pos] === 0x78 && [0x01, 0x5E, 0x9C, 0xDA].includes(data[pos + 1])) {
       for (let end = pos + 2; end <= data.length; end++) {
@@ -134,7 +112,6 @@ function extractZlibStreams(data: Buffer): Buffer[] {
     }
     pos++;
   }
-  
   return streams;
 }
 
@@ -150,62 +127,60 @@ export function parseItwHeader(data: Buffer): ItwHeader {
 }
 
 export function decodeItwV1(data: Buffer, options: DecodeOptions = {}): ItwV1Result {
-  const { mode = 'bilinear', detailScale = 0.5 } = options;
+  const { mode = 'bilinear' } = options;
   const header = parseItwHeader(data);
   
-  if (header.magic !== 'ITW_') throw new Error(`Not ITW file: "${header.magic}"`);
+  if (header.magic !== 'ITW_') throw new Error(`Not ITW: "${header.magic}"`);
   if (header.formatVersion !== 0x0300) throw new Error(`Not V1: 0x${header.formatVersion.toString(16)}`);
   
   const { width, height } = header;
   const payload = data.subarray(18, 18 + header.compressedSize);
   const streams = extractZlibStreams(payload);
   
-  if (streams.length < 17) throw new Error(`Need 17+ streams, got ${streams.length}`);
-  
-  // LL4 from stream 16
-  const ll4Raw = Array.from(streams[16]);
-  const minLL = Math.min(...ll4Raw), maxLL = Math.max(...ll4Raw);
-  const ll4 = ll4Raw.map(v => ((v - minLL) * 255) / (maxLL - minLL || 1));
-  
+  // Find LL4 stream (matches expected size)
   const ll4W = Math.ceil(width / 16), ll4H = Math.ceil(height / 16);
+  const ll4Size = ll4W * ll4H;
+  
+  let ll4Stream: Buffer | undefined;
+  for (const s of streams) {
+    if (s.length === ll4Size) {
+      ll4Stream = s;
+      break;
+    }
+  }
+  
+  if (!ll4Stream) throw new Error(`LL4 stream not found (expected ${ll4Size} bytes)`);
+  
+  const ll4Raw = Array.from(ll4Stream);
+  let minLL = Infinity, maxLL = -Infinity;
+  for (const v of ll4Raw) {
+    if (v < minLL) minLL = v;
+    if (v > maxLL) maxLL = v;
+  }
+  const ll4 = ll4Raw.map(v => ((v - minLL) * 255) / (maxLL - minLL || 1));
   
   let pixels: number[];
   
   if (mode === 'bilinear') {
-    pixels = bilinearUpscale(ll4, ll4W, ll4H, width, height);
+    pixels = bilinear(ll4, ll4W, ll4H, width, height);
   } else {
-    // Wavelet mode with detail bands
+    // CDF 5/3 pyramid: L4 → L3 → L2 → L1 → Full
+    const l3W = Math.ceil(width / 8), l3H = Math.ceil(height / 8);
+    const l2W = Math.ceil(width / 4), l2H = Math.ceil(height / 4);
     const l1W = Math.ceil(width / 2), l1H = Math.ceil(height / 2);
-    const l1Size = l1W * l1H;
     
-    // Decode detail bands (S0+S1=LH1, S2+S3=HL1, S6+S7=HH1)
-    const lh1 = decodeRle(
-      Array.from(streams[0]),
-      Array.from(streams[1]).map(fischerDecode),
-      l1Size
-    ).map(v => v * detailScale);
-    
-    const hl1 = decodeRle(
-      Array.from(streams[2]),
-      Array.from(streams[3]).map(fischerDecode),
-      l1Size
-    ).map(v => v * detailScale);
-    
-    const hh1 = streams.length > 7 ? decodeRle(
-      Array.from(streams[6]),
-      Array.from(streams[7]).map(fischerDecode),
-      l1Size
-    ).map(v => v * detailScale) : null;
-    
-    // Build pyramid
-    let ll3 = haarInverse2D(ll4, null, null, null, 40, 30);
-    let ll2 = haarInverse2D(ll3, null, null, null, 79, 60);
-    let ll1 = haarInverse2D(ll2, null, null, null, l1W, l1H);
-    pixels = haarInverse2D(ll1, lh1, hl1, hh1, width, height);
+    let ll3 = cdf53Inv2D_LLonly(ll4, ll4W, ll4H, l3W, l3H);
+    let ll2 = cdf53Inv2D_LLonly(ll3, l3W, l3H, l2W, l2H);
+    let ll1 = cdf53Inv2D_LLonly(ll2, l2W, l2H, l1W, l1H);
+    pixels = cdf53Inv2D_LLonly(ll1, l1W, l1H, width, height);
   }
   
-  // Normalize and clamp
-  const minV = Math.min(...pixels), maxV = Math.max(...pixels);
+  // Normalize (loop to avoid stack overflow)
+  let minV = Infinity, maxV = -Infinity;
+  for (const p of pixels) {
+    if (p < minV) minV = p;
+    if (p > maxV) maxV = p;
+  }
   const range = maxV - minV || 1;
   const result = new Uint8Array(width * height);
   for (let i = 0; i < pixels.length; i++) {

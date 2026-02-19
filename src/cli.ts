@@ -9,18 +9,17 @@ function printUsage() {
 tisx - TIS image format decoder
 
 Usage:
-  tisx decode <file.itw> [output.png] [--mode=bilinear|wavelet]
+  tisx decode <file.itw> [output.png] [--mode=bilinear|cdf53]
   tisx info <file.itw>
   tisx help
 
-Options:
-  --mode=bilinear  Fast, smooth but blurry (default)
-  --mode=wavelet   Uses detail bands, blocky but sharper
+Modes:
+  bilinear  Smooth upscale from LL4 (default, best quality)
+  cdf53     CDF 5/3 wavelet reconstruction
 
 Examples:
   tisx decode image.itw
-  tisx decode image.itw out.png --mode=wavelet
-  tisx info image.itw
+  tisx decode image.itw out.png --mode=cdf53
 `);
 }
 
@@ -36,7 +35,9 @@ function cmdInfo(filePath: string) {
   console.log(`Compressed: ${header.compressedSize} bytes`);
 }
 
-function cmdDecode(filePath: string, outputPath?: string, mode: 'bilinear' | 'wavelet' = 'bilinear') {
+type DecodeMode = 'bilinear' | 'cdf53';
+
+function cmdDecode(filePath: string, outputPath?: string, mode: DecodeMode = 'bilinear') {
   const data = fs.readFileSync(filePath);
   const header = parseItwHeader(data);
   
@@ -46,24 +47,21 @@ function cmdDecode(filePath: string, outputPath?: string, mode: 'bilinear' | 'wa
   }
   
   console.log(`Decoding: ${path.basename(filePath)} (${header.width}×${header.height}, mode=${mode})`);
-  
   const result = decodeItwV1(data, { mode });
   
   const output = outputPath || filePath.replace(/\.itw$/i, '.png');
   fs.writeFileSync(output, encodePng(result.pixels, result.width, result.height));
-  
   console.log(`Saved: ${output}`);
 }
 
 const args = process.argv.slice(2);
 const cmd = args[0];
 
-// Parse --mode option
-let mode: 'bilinear' | 'wavelet' = 'bilinear';
+let mode: DecodeMode = 'bilinear';
 const modeArg = args.find(a => a.startsWith('--mode='));
 if (modeArg) {
   const modeVal = modeArg.split('=')[1];
-  if (modeVal === 'wavelet' || modeVal === 'bilinear') mode = modeVal;
+  if (modeVal === 'bilinear' || modeVal === 'cdf53') mode = modeVal;
 }
 
 const nonFlagArgs = args.filter(a => !a.startsWith('--'));
