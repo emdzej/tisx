@@ -73,3 +73,50 @@ tisx info image.itw                # show file info
 BMW TIS graphics directory: `/Users/emdzej/Documents/tis/GRAFIK/`
 - Small: `1/03/95/26.ITW` (316×238, 8KB)
 - Large: `1/09/87/90.ITW` (632×711, 99KB)
+
+## Session Notes (2026-02-19)
+
+### Stream Pairing Analysis
+
+| Pair | Position Stream | Value Stream | Flagged % |
+|------|-----------------|--------------|-----------|
+| S0/S1 | 2380 bytes | 996 bytes | 45% |
+| S2/S3 | 2528 bytes | 1470 bytes | 44% |
+| S4/S5 | 1200 bytes | 782 bytes | 42% |
+| S6/S7 | 1264 bytes | 1093 bytes | 42% |
+
+### Block Mapping
+
+S0 produces 319 blocks for L1 (158×119):
+- Small blocks (≤8): 276 blocks, 1057 positions
+- Large blocks (>8): 43 blocks (size 135-136), 5836 positions
+- Total: 6893 positions
+
+S1 entries map to blocks:
+- Small block: 1 entry
+- Large block: ceil(count/8) entries
+- Expected: 1007 entries (actual: 996)
+
+### Value Encoding
+
+Direct entries (550): 
+- 7-bit signed value (-64 to +63)
+- Applied to all positions in block/sub-block
+
+Flagged entries (446):
+- Most common masked values: 64, 32, 0
+- Fischer decode with parameters from S3 bit stream
+
+### Working Decoder
+
+Current state produces recognizable but noisy image:
+- LL4 bilinear baseline: clear but blurry
+- Adding L1 detail: adds horizontal stripe artifacts
+- Problem: detail values correct but positions create banding
+
+### Next Steps
+
+1. Check if position linearization is wrong (zigzag? tiled?)
+2. Try using S2/S3 (100% L1 coverage) instead of S0/S1
+3. Verify wavelet level assignments
+4. May need proper inverse DWT instead of simple addition
