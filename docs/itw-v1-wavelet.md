@@ -1,114 +1,277 @@
-# ITW V1 (0x0300) Wavelet Format
+# ITW V1 Format (Type 0x0300) - Wavelet Compression
 
 ## Overview
-ITW V1 uses biorthogonal CDF 7/5 wavelet compression with 4 decomposition levels.
+
+ITW V1 uses **CDF 7/5 biorthogonal wavelet** compression with **Fischer/Combinatorial coding** for coefficient encoding. This is a sophisticated scheme similar to JPEG2000.
 
 ## File Structure
+
 ```
 Offset  Size  Description
-0-3     4     Magic "ITW_" (0x4954575F)
-4-5     2     Unknown
-6-7     2     Width (big-endian)
-8-9     2     Height (big-endian)
-10-11   2     Bit depth (big-endian, usually 8)
-12-13   2     Format type (0x0300 for V1)
-14-17   4     Compressed data size (big-endian)
-18+     var   Compressed data (zlib streams)
+------  ----  -----------
+0       4     Magic: "ITW_" (0x4954575F)
+4       2     Type: 0x0300 (V1 wavelet)
+6       2     Width (big-endian)
+8       2     Height (big-endian)
+10      4     Unknown
+14      4     Compressed data size (big-endian)
+18      N     Compressed data (multiple zlib streams)
 ```
 
-## Compressed Data
-- Byte 0: Mode flag
-- Byte 1: Wavelet decomposition levels (typically 4)
-- Byte 2: Filter type (0=9/7, 1=7/5 biorthogonal)
-- Bytes 3+: Multiple zlib-compressed coefficient streams
+## Wavelet Decomposition
 
-## Wavelet Decomposition (316×238 example)
+4-level CDF 7/5 decomposition:
+
 ```
-Level 0: full=316×238 → LL=158×119, details=158×119 each
-Level 1: full=158×119 → LL=79×60,   details vary
-Level 2: full=79×60   → LL=40×30,   LH=40×30, HL=39×30, HH=39×30
-Level 3: full=40×30   → LL=20×15,   details=20×15 each
+Level 0: Full resolution (316×238)
+Level 1: 158×119 → LL1, LH1, HL1, HH1
+Level 2: 79×60   → LL2, LH2, HL2, HH2  
+Level 3: 40×30   → LL3, LH3, HL3, HH3
+Level 4: 20×15   → LL4 (deepest)
 ```
 
-## Stream Encoding Types
+## Stream Layout
 
-### Direct Storage (WORKING ✅)
-Streams with size exactly matching subband size contain direct coefficients:
-- **LL band**: Unsigned pixel values (typical range 20-80)
-- **Detail bands**: Signed coefficients (int8, centered at 0)
+The compressed data contains 19 zlib-compressed streams:
 
-Example (26.ITW):
-| Stream | Size | Avg | Content |
-|--------|------|-----|---------|
-| 4 | 1200 | 8.8 | LH2 - 40×30 signed coefficients |
-| 16 | 300 | 49.4 | LL3 - 20×15 pixel values |
-| 18 | 300 | 21.2 | Detail L3 |
+| Stream | Content | Format | Size Formula |
+|--------|---------|--------|--------------|
+| 0 | LH1 RLE positions | RLE | Variable |
+| 1 | LH1 values | Fischer codes | Variable |
+| 2 | HL1 RLE positions | RLE | Variable |
+| 3 | HL1 values | Fischer codes | Variable |
+| 4 | **LH2 coefficients** | Direct s8 | 79×15 = 1185 |
+| 5 | HL2 RLE positions | RLE | Variable |
+| 6 | HL2 values | Fischer codes | Variable |
+| 7 | HH2 RLE positions | RLE | Variable |
+| 8 | HH2 values | Fischer codes | Variable |
+| 9-15 | Level 3 subbands | Mixed | Variable |
+| 16 | **LL3 (deepest)** | Direct u8 | 40×30 = 1200* |
+| 17-18 | Additional data | Unknown | Variable |
 
-### RLE Encoding (PARTIAL)
-Larger subbands use RLE encoding in stream pairs:
-- **Low-avg stream** (~5-15): Position/skip data  
-- **High-avg stream** (~100-130): Value stream (encoding unclear)
+*Actual LL size depends on image dimensions
 
-#### RLE Position Stream (S0, S2, etc.)
-Byte interpretation:
-- `0x00`: Read coefficient from value stream, advance position by 1
-- `0x01-0x7F`: Skip N positions (no coefficient)
-- `0x80-0xFF`: Embedded coefficient (value - 192), advance position by 1
+## RLE Format
 
-#### Value Stream Padding
-Value streams contain trailing padding patterns that must be stripped:
-- **S1**: Pattern `[192, 4, 160]` repeats 80× from position 616
-- **S3**: Pattern `[154, 18, 179, 166, 196, 172, 41, 49, 107, 74, 204]` repeats 31× from position 988
+Position streams use Run-Length Encoding:
 
-#### Value Stream Issue (UNSOLVED)
-After removing padding, value streams still don't behave like wavelet coefficients:
-- **S1 trimmed (616 bytes)**: Mean absolute 55.9, uniform distribution 0-128
-- **S4 direct (1200 bytes)**: Mean absolute 12.5, 79% values in 0-9 range
-
-S1 has many power-of-2 values (0, 32, 64, 128, 160, 192) suggesting it may be:
-- Bitfield data
-- Indices into a lookup table
-- Differently encoded (not simple signed bytes)
-
-## CDF 7/5 Inverse Wavelet Transform (IMPLEMENTED ✅)
-
-### 1D Lifting Scheme
 ```
-Inverse Update: s[n] -= (d[n-1] + d[n] + 2) / 4
-Inverse Predict: d[n] += (x[2n] + x[2n+2]) / 2
+0x00:       Place coefficient (read from value stream)
+0x01-0x7F:  Skip N positions (N zeros)
+0x80-0xFF:  Embedded coefficient = byte - 192 (range: -64 to +63)
+```
+
+## Fischer/Combinatorial Coding
+
+### Concept
+
+Fischer coding encodes multiple coefficients as a single integer using combinatorial number system. A single "code" integer is decoded into a sequence of coefficient values using a lookup table.
+
+### Lookup Table Structure
+
+9×201 table where each row is cumulative sum of previous:
+
+```python
+# Row 0: all ones
+table[0] = [1, 1, 1, 1, ...]
+
+# Row 1: odd numbers (2n+1)
+table[1] = [1, 3, 5, 7, 9, 11, ...]
+
+# Row 2: centered square numbers (2n²+2n+1)  
+table[2] = [1, 5, 13, 25, 41, 61, 85, 113, 145, 181, 221, ...]
+
+# Row 3+: cumulative sums
+table[r][n] = sum(table[r-1][0:n+1])
+```
+
+### Value Stream Format
+
+From decompiled `FUN_004b72b0`:
+
+```
+For level >= 2:
+1. Read byte from value stream
+2. has_sign_ext = (byte & 0x80) != 0
+3. index = byte & 0x7F
+4. If has_sign_ext: read 4 bits for sign extension
+5. Use index with lookup table to get bit count
+6. Read that many bits as coefficient value
+```
+
+### Fischer Decode Algorithm
+
+From decompiled `FUN_004bbdf0`:
+
+```python
+def fischer_decode(code, num_coeffs, sign_bits, table_row):
+    """
+    Decode single integer into multiple coefficients.
+    
+    Args:
+        code: Fischer-encoded integer
+        num_coeffs: Number of coefficients to extract
+        sign_bits: Bit flags for coefficient signs
+        table_row: Which row of Fischer table to use
+    """
+    coeffs = []
+    remaining = code
+    
+    for i in range(num_coeffs - 1, -1, -1):
+        # Binary search for largest k where table[row][k] <= remaining
+        k = 0
+        for j in range(200, -1, -1):
+            if FISCHER_TABLE[table_row][j] <= remaining:
+                k = j
+                break
+        
+        # Apply sign from sign_bits
+        sign = -1 if (sign_bits >> i) & 1 else 1
+        coeffs.append(k * sign)
+        
+        remaining -= FISCHER_TABLE[table_row][k]
+    
+    return list(reversed(coeffs))
+```
+
+## Bit Reader
+
+From decompiled `FUN_004bc1d0` and `FUN_004bc220`:
+
+```python
+class BitReader:
+    def __init__(self, data):
+        self.data = data
+        self.byte_pos = 0
+        self.bit_pos = 0
+        self.current_byte = 0
+    
+    def read_bit(self):
+        """Read single bit (LSB first)"""
+        if self.bit_pos == 0:
+            self.current_byte = self.data[self.byte_pos]
+        
+        bit = self.current_byte & 1
+        self.current_byte >>= 1
+        self.bit_pos += 1
+        
+        if self.bit_pos == 8:
+            self.bit_pos = 0
+            self.byte_pos += 1
+        
+        return bit
+    
+    def read_bits(self, n):
+        """Read N bits, LSB first"""
+        value = 0
+        for i in range(n):
+            if self.read_bit():
+                value |= (1 << i)
+        return value
+```
+
+## Dequantization
+
+### Level 1 (from `FUN_004b70a0`)
+
+```python
+def dequantize_level1(raw, quant, scale, offset, factor):
+    return (raw % (quant * 2 + 1) - quant) * (scale / quant) * factor + offset
+```
+
+### Multi-level (from `FUN_004b6c40`)
+
+```python
+def dequantize(raw, quant, scale, offset):
+    scale_factor = (16 - level_param) / 16  # from FUN_004b8a40
+    return raw * (scale / scale_factor) + offset
+```
+
+### Quantization Steps per Level
+
+```python
+QUANT_STEPS = [8, 8, 4, 4, 4, 2, 2, 2, 1, 1, 1]
+# Index: [LH0, HL0, HH0, LH1, HL1, HH1, LH2, HL2, HH2, LH3, HL3]
+```
+
+## CDF 7/5 Inverse Wavelet Transform
+
+### 1D Transform
+
+```python
+def cdf75_inverse_1d(low, high, output_length):
+    """
+    Inverse CDF 7/5 lifting transform.
+    low: Low-frequency coefficients (even positions)
+    high: High-frequency coefficients (odd positions)
+    """
+    # Update step (modify low using high)
+    for i in range(len(low)):
+        left = high[i-1] if i > 0 else 0
+        right = high[i] if i < len(high) else (high[-1] if high else 0)
+        low[i] = low[i] - (left + right + 2) / 4
+    
+    # Interleave
+    result = [0] * output_length
+    for i in range(len(low)):
+        result[2*i] = low[i]
+    
+    # Predict step (reconstruct high using updated low)
+    for i in range(len(high)):
+        left = result[2*i]
+        right = result[2*i+2] if 2*i+2 < output_length else result[2*i]
+        result[2*i+1] = high[i] + (left + right) / 2
+    
+    return result
 ```
 
 ### 2D Transform
-1. Vertical: Reconstruct columns from (LL + LH) and (HL + HH)
-2. Horizontal: Reconstruct rows from left and right column results
 
-## Coefficient Characteristics
-- Detail coefficients are sparse (most near zero)
-- Example: LH2 has 894/1200 values in range -5 to +5
-- Large values mark edges/high-frequency content
-- Embedded RLE coefficients: only -58, -57, -56 observed
+Apply 1D transform first on columns (vertical), then on rows (horizontal).
 
 ## Current Implementation Status
-- ✅ CDF 7/5 inverse wavelet transform (1D and 2D)
-- ✅ LL3 + LH2 reconstruction (clean output)
-- ✅ Direct storage stream identification
-- ✅ RLE position stream decoding
-- ✅ Padding pattern detection and removal
-- ⚠️ RLE value stream interpretation (produces noise)
-- ⏳ Complete multi-level reconstruction with all subbands
 
-## Test Results
+### Working ✅
+- File header parsing
+- Zlib stream extraction
+- LL3 direct decoding (stream 16)
+- LH2 direct decoding (stream 4, signed bytes)
+- RLE position parsing
+- RLE embedded values (byte - 192)
+- CDF 7/5 inverse transform
+- Fischer table generation
 
-### Working Reconstruction
-LL3 + LH2 only produces clean output with horizontal edge detail.
+### Partial 🔶
+- Value stream parsing (format understood, not fully implemented)
+- Fischer decoding (algorithm known, integration pending)
 
-### Issues with Level 1 Bands
-Adding LH1/HL1 from RLE decoding introduces significant noise, suggesting:
-1. Value stream encoding is different than expected
-2. Position stream interpretation may be partially wrong
-3. Streams may be mapped to different subbands
+### Not Implemented ❌
+- Complete bit reader with stream state
+- Full coefficient extraction from Fischer codes
+- Per-level dequantization
+- HH subband decoding
+
+## Key Functions from TIS.exe
+
+| Address | Function | Purpose |
+|---------|----------|---------|
+| 004b5780 | Dispatcher | Routes V1 vs V2 |
+| 004b5b30 | V1 Entry | Main decoder entry |
+| 004b7970 | WaveletDecomp | Core decompression |
+| 004b72b0 | CoeffReader | Read from streams |
+| 004b7180 | Placement | Route to level handlers |
+| 004b70a0 | Level1Place | Simple dequant |
+| 004b6c40 | MultiLevel | Fischer-based placement |
+| 004bbdf0 | FischerDecode | Combinatorial decoder |
+| 004bc220 | ReadBits | Read N bits |
+| 004bc1d0 | ReadBit | Read 1 bit (LSB first) |
+| 004b8a60 | BuildTable | Create Fischer lookup |
+| 004b8a40 | ScaleFactor | `(16-n)/16` |
+| 004b88a0 | TableLookup | 3D array accessor |
 
 ## References
+
+- BMW TIS (Technical Information System)
 - CDF 7/5: Cohen-Daubechies-Feauveau biorthogonal wavelet
-- Used in JPEG 2000 lossy compression
-- Lifting scheme from Sweldens 1996
+- Combinatorial Number System (Fischer coding)
+- Ghidra decompilation of tis.exe

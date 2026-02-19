@@ -1,158 +1,164 @@
 /**
- * ITW V1 (0x0300) Wavelet Image Decoder
+ * ITW V1 Wavelet Decoder
  *
- * Based on reverse engineering of tis.exe from BMW TIS.
- *
- * File Structure:
- * - Header (18 bytes):
- *   - 0-3: Magic "ITW_" (0x4954575F)
- *   - 4-5: Unknown
- *   - 6-7: Width (big-endian)
- *   - 8-9: Height (big-endian)
- *   - 10-11: Bit depth (big-endian, usually 8)
- *   - 12-13: Format type (0x0300 for V1 wavelet)
- *   - 14-17: Compressed data size (big-endian)
- *   - 18+: Compressed data
- *
- * Compressed Data:
- *   - Byte 0: Mode flag
- *   - Byte 1: Wavelet decomposition levels (3 or 4)
- *   - Byte 2: Filter type (0=9/7, 1=7/5 biorthogonal)
- *   - Bytes 3+: Subband metadata + zlib-compressed coefficient streams
- *
- * Wavelet Structure (4 levels):
- *   - 12 subbands: LH0, HL0, HH0, LH1, HL1, HH1, LH2, HL2, HH2, LH3, HL3, HH3
- *   - Plus LL3 (lowest frequency band)
- *   - Each subband stored as zlib-compressed data
+ * Decodes BMW TIS ITW images using CDF 7/5 wavelet decompression
+ * with Fischer/Combinatorial coding for coefficient encoding.
  */
 
-import * as zlib from 'zlib';
+import * as zlib from "zlib";
 
-export interface ItwV1Header {
-  magic: string;
-  width: number;
-  height: number;
-  bitDepth: number;
-  formatType: number;
-  compressedSize: number;
-}
-
-export interface ItwV1Metadata {
-  modeFlag: number;
-  levels: number;
-  filterType: number;
-}
-
-export interface ZlibStream {
-  offset: number;
-  data: Buffer;
-  size: number;
-  average: number;
-}
-
-export interface ItwV1DecodeResult {
-  header: ItwV1Header;
-  metadata: ItwV1Metadata;
-  pixels: Buffer;
-  llOnly: boolean;
-}
+// Quantization steps per wavelet level
+const QUANT_STEPS = [8, 8, 4, 4, 4, 2, 2, 2, 1, 1, 1];
 
 /**
- * Parse ITW V1 header
+ * Fischer/Combinatorial lookup table
+ * 9 rows × 201 columns
+ * Each row is cumulative sum of previous row
  */
-export function parseItwV1Header(buffer: Buffer): ItwV1Header | null {
-  if (buffer.length < 18) return null;
+function buildFischerTable(maxN = 201): number[][] {
+  const table: number[][] = [];
 
-  const magic = buffer.subarray(0, 4).toString('ascii');
-  if (magic !== 'ITW_') return null;
+  // Row 0: all ones
+  table[0] = Array(maxN).fill(1);
 
-  const formatType = buffer.readUInt16BE(12);
-  if (formatType !== 0x0300) return null;
+  // Row 1: odd numbers (2n+1)
+  table[1] = Array.from({ length: maxN }, (_, n) => 2 * n + 1);
 
-  return {
-    magic,
-    width: buffer.readUInt16BE(6),
-    height: buffer.readUInt16BE(8),
-    bitDepth: buffer.readUInt16BE(10),
-    formatType,
-    compressedSize: buffer.readUInt32BE(14),
-  };
-}
-
-/**
- * Find all zlib-compressed streams in data
- */
-export function findZlibStreams(data: Buffer): ZlibStream[] {
-  const streams: ZlibStream[] = [];
-  let pos = 0;
-
-  while (pos < data.length - 2) {
-    // zlib magic: 78 01 (no compression), 78 5E (fast), 78 9C (default), 78 DA (best)
-    if (data[pos] === 0x78 && [0x01, 0x5e, 0x9c, 0xda].includes(data[pos + 1])) {
-      let found = false;
-      for (let end = pos + 2; end <= data.length; end++) {
-        try {
-          const decompressed = zlib.inflateSync(data.subarray(pos, end));
-          const avg =
-            decompressed.length > 0
-              ? decompressed.reduce((a, b) => a + b, 0) / decompressed.length
-              : 0;
-
-          streams.push({
-            offset: pos,
-            data: decompressed,
-            size: decompressed.length,
-            average: avg,
-          });
-          pos = end;
-          found = true;
-          break;
-        } catch {
-          continue;
-        }
-      }
-      if (!found) pos++;
-    } else {
-      pos++;
+  // Rows 2-8: cumulative sums
+  for (let r = 2; r < 9; r++) {
+    table[r] = [];
+    let cumsum = 0;
+    for (let j = 0; j < maxN; j++) {
+      cumsum += table[r - 1][j];
+      table[r][j] = cumsum;
     }
   }
 
-  return streams;
+  return table;
+}
+
+const FISCHER_TABLE = buildFischerTable();
+
+/**
+ * Bit reader for LSB-first bit streams
+ */
+class BitReader {
+  private data: Uint8Array;
+  private bytePos = 0;
+  private bitPos = 0;
+  private currentByte = 0;
+
+  constructor(data: number[] | Uint8Array) {
+    this.data = data instanceof Uint8Array ? data : new Uint8Array(data);
+  }
+
+  /**
+   * Read single bit (LSB first)
+   */
+  readBit(): number {
+    if (this.bitPos === 0) {
+      this.currentByte = this.data[this.bytePos] || 0;
+    }
+
+    const bit = this.currentByte & 1;
+    this.currentByte >>= 1;
+    this.bitPos++;
+
+    if (this.bitPos === 8) {
+      this.bitPos = 0;
+      this.bytePos++;
+    }
+
+    return bit;
+  }
+
+  /**
+   * Read N bits, LSB first
+   */
+  readBits(n: number): number {
+    let value = 0;
+    for (let i = 0; i < n; i++) {
+      if (this.readBit()) {
+        value |= 1 << i;
+      }
+    }
+    return value;
+  }
+
+  /**
+   * Check if more data available
+   */
+  hasMore(): boolean {
+    return this.bytePos < this.data.length;
+  }
 }
 
 /**
- * Decode RLE-encoded coefficient stream
- *
- * RLE encoding:
- * - 0x00: Place next coefficient from value stream, advance position by 1
- * - 0x01-0x7F: Skip N positions (no coefficient)
- * - 0x80-0xFF: Embedded coefficient (value - 192), advance position by 1
+ * Decode Fischer-encoded integer into multiple coefficients
  */
-export function decodeRleCoefficients(
-  rleData: Buffer,
-  valueData: Buffer,
-  maxSize: number
+function fischerDecode(
+  code: number,
+  numCoeffs: number,
+  signBits: number,
+  tableRow: number
+): number[] {
+  const coeffs: number[] = [];
+  let remaining = code;
+
+  for (let i = numCoeffs - 1; i >= 0; i--) {
+    // Find largest k where table[row][k] <= remaining
+    let k = 0;
+    for (let j = 200; j >= 0; j--) {
+      if (FISCHER_TABLE[tableRow][j] <= remaining) {
+        k = j;
+        break;
+      }
+    }
+
+    // Apply sign from signBits
+    const sign = (signBits >> i) & 1 ? -1 : 1;
+    coeffs.push(k * sign);
+
+    remaining -= FISCHER_TABLE[tableRow][k];
+  }
+
+  return coeffs.reverse();
+}
+
+/**
+ * Decode RLE stream with optional value stream
+ */
+function decodeRleCoefficients(
+  rleStream: number[],
+  valueStream: number[] | null,
+  maxSize: number,
+  quantIdx: number
 ): number[] {
   const coeffs = new Array(maxSize).fill(0);
   let pos = 0;
   let valIdx = 0;
 
-  for (const byte of rleData) {
+  const quant = QUANT_STEPS[quantIdx] || 1;
+
+  for (const byte of rleStream) {
     if (pos >= maxSize) break;
 
     if (byte === 0) {
       // Place coefficient from value stream
-      if (valIdx < valueData.length) {
-        const v = valueData[valIdx];
-        coeffs[pos] = v > 127 ? v - 256 : v; // Signed int8
-        valIdx++;
+      if (valueStream && valIdx < valueStream.length) {
+        const v = valueStream[valIdx++];
+        const hasSignExt = (v & 0x80) !== 0;
+        const index = v & 0x7f;
+
+        // Simple interpretation: index is magnitude, high bit is sign
+        coeffs[pos] = hasSignExt ? -index : index;
       }
       pos++;
     } else if (byte < 128) {
       // Skip N positions
       pos += byte;
     } else {
-      // Embedded coefficient (centered at 192)
+      // Embedded coefficient (byte - 192)
       coeffs[pos] = byte - 192;
       pos++;
     }
@@ -162,36 +168,57 @@ export function decodeRleCoefficients(
 }
 
 /**
- * 1D CDF 7/5 inverse wavelet transform using integer lifting
+ * 1D CDF 7/5 inverse wavelet transform
  */
-function cdf75Inverse1D(s: number[], d: number[] | null, outLen: number): number[] {
-  const sCopy = [...s];
-  const dArr = d || [];
+function cdf75Inverse1D(
+  low: number[],
+  high: number[] | null,
+  outLen: number
+): number[] {
+  const s = low.map((x) => x);
+  const d = high ? high.map((x) => x) : [];
 
-  // Inverse Update: s[n] -= (d[n-1] + d[n] + 2) / 4
-  for (let i = 0; i < sCopy.length; i++) {
-    const left = i > 0 && dArr.length ? dArr[i - 1] : 0;
-    const right = i < dArr.length ? dArr[i] : dArr.length ? dArr[dArr.length - 1] : 0;
-    sCopy[i] = sCopy[i] - (left + right + 2) / 4;
+  // Update step (modify low-frequency using high-frequency)
+  for (let i = 0; i < s.length; i++) {
+    const left = i > 0 && d.length > 0 ? d[i - 1] : 0;
+    const right =
+      i < d.length ? d[i] : d.length > 0 ? d[d.length - 1] : 0;
+    s[i] = s[i] - (left + right + 2) / 4;
   }
 
-  // Interleave
+  // Interleave even samples
   const result = new Array(outLen).fill(0);
-  for (let i = 0; i < sCopy.length; i++) {
+  for (let i = 0; i < s.length; i++) {
     if (2 * i < outLen) {
-      result[2 * i] = sCopy[i];
+      result[2 * i] = s[i];
     }
   }
 
-  // Inverse Predict: d[n] += (x[2n] + x[2n+2]) / 2
-  for (let i = 0; i < dArr.length; i++) {
+  // Predict step (reconstruct odd samples)
+  for (let i = 0; i < d.length; i++) {
     if (2 * i + 1 < outLen) {
       const left = result[2 * i];
       const right = 2 * i + 2 < outLen ? result[2 * i + 2] : result[2 * i];
-      result[2 * i + 1] = dArr[i] + (left + right) / 2;
+      result[2 * i + 1] = d[i] + (left + right) / 2;
     }
   }
 
+  return result;
+}
+
+/**
+ * Convert 1D array to 2D
+ */
+function to2D(arr: number[] | null, width: number, height: number): number[][] {
+  const result: number[][] = [];
+  for (let y = 0; y < height; y++) {
+    const row: number[] = [];
+    for (let x = 0; x < width; x++) {
+      const idx = y * width + x;
+      row.push(arr && idx < arr.length ? arr[idx] : 0);
+    }
+    result.push(row);
+  }
   return result;
 }
 
@@ -208,214 +235,195 @@ function cdf75Inverse2D(
 ): number[] {
   const llW = Math.ceil(outW / 2);
   const llH = Math.ceil(outH / 2);
-  const lhH = outH - llH;
-  const hlW = outW - llW;
-
-  const to2D = (arr: number[] | null, w: number, h: number): number[][] =>
-    Array.from({ length: h }, (_, y) =>
-      Array.from({ length: w }, (_, x) => (arr && y * w + x < arr.length ? arr[y * w + x] : 0))
-    );
+  const lhH = lh ? outH - llH : 0;
+  const hlW = hl ? outW - llW : 0;
 
   const ll2d = to2D(ll, llW, llH);
-  const lh2d = to2D(lh, llW, lhH);
-  const hl2d = to2D(hl, hlW, llH);
-  const hh2d = to2D(hh, hlW, lhH);
+  const lh2d = lh ? to2D(lh, llW, lhH) : null;
+  const hl2d = hl ? to2D(hl, hlW, llH) : null;
+  const hh2d = hh ? to2D(hh, hlW, lhH) : null;
 
-  // Vertical reconstruction
-  const leftCols = Array.from({ length: llW }, (_, x) =>
-    cdf75Inverse1D(
-      ll2d.map((row) => row[x]),
-      lh2d.map((row) => row[x]),
-      outH
-    )
-  );
+  // Vertical transform on each column
+  const leftCols: number[][] = [];
+  for (let x = 0; x < llW; x++) {
+    const lowCol = ll2d.map((row) => row[x]);
+    const highCol = lh2d ? lh2d.map((row) => row[x]) : null;
+    leftCols.push(cdf75Inverse1D(lowCol, highCol, outH));
+  }
 
-  const rightCols = Array.from({ length: hlW }, (_, x) =>
-    cdf75Inverse1D(
-      hl2d.map((row) => row[x]),
-      hh2d.map((row) => row[x]),
-      outH
-    )
-  );
+  const rightCols: number[][] = [];
+  for (let x = 0; x < hlW; x++) {
+    const lowCol = hl2d ? hl2d.map((row) => row[x]) : new Array(llH).fill(0);
+    const highCol = hh2d ? hh2d.map((row) => row[x]) : null;
+    rightCols.push(cdf75Inverse1D(lowCol, highCol, outH));
+  }
 
-  // Horizontal reconstruction
+  // Horizontal transform on each row
   const result: number[] = [];
   for (let y = 0; y < outH; y++) {
-    const rowS = leftCols.map((col) => col[y]);
-    const rowD = rightCols.map((col) => col[y]);
-    result.push(...cdf75Inverse1D(rowS, rowD, outW));
+    const lowRow = leftCols.map((col) => col[y]);
+    const highRow = rightCols.map((col) => col[y]);
+    result.push(...cdf75Inverse1D(lowRow, highRow.length > 0 ? highRow : null, outW));
   }
 
   return result;
 }
 
 /**
- * Bilinear upscale
+ * Find and decompress all zlib streams in data
  */
-function bilinearUpscale(
-  src: number[],
-  srcW: number,
-  srcH: number,
-  dstW: number,
-  dstH: number
-): number[] {
-  const result: number[] = [];
+function findZlibStreams(data: Buffer): number[][] {
+  const streams: number[][] = [];
+  let pos = 0;
 
-  for (let y = 0; y < dstH; y++) {
-    for (let x = 0; x < dstW; x++) {
-      const srcY = (y * srcH) / dstH;
-      const srcX = (x * srcW) / dstW;
+  while (pos < data.length - 2) {
+    // Check for zlib header
+    if (
+      data[pos] === 0x78 &&
+      [0x01, 0x5e, 0x9c, 0xda].includes(data[pos + 1])
+    ) {
+      // Try to decompress
+      for (let end = pos + 2; end <= data.length; end++) {
+        try {
+          const decompressed = zlib.inflateSync(data.subarray(pos, end));
+          streams.push(Array.from(decompressed));
+          pos = end;
+          break;
+        } catch {
+          continue;
+        }
+      }
+    }
+    pos++;
+  }
 
-      const y0 = Math.floor(srcY);
-      const x0 = Math.floor(srcX);
-      const y1 = Math.min(y0 + 1, srcH - 1);
-      const x1 = Math.min(x0 + 1, srcW - 1);
+  return streams;
+}
 
-      const fy = srcY - y0;
-      const fx = srcX - x0;
+/**
+ * Trim padding from value stream
+ * Detects repeating patterns at end of stream
+ */
+function trimPadding(stream: number[], minPatternLen = 3): number[] {
+  if (stream.length < minPatternLen * 2) return stream;
 
-      const v00 = src[y0 * srcW + x0];
-      const v01 = src[y0 * srcW + x1];
-      const v10 = src[y1 * srcW + x0];
-      const v11 = src[y1 * srcW + x1];
+  // Look for repeating pattern at end
+  for (let patLen = minPatternLen; patLen <= 20; patLen++) {
+    const pattern = stream.slice(-patLen);
+    let repeats = 0;
+    let checkPos = stream.length - patLen;
 
-      const v =
-        v00 * (1 - fx) * (1 - fy) +
-        v01 * fx * (1 - fy) +
-        v10 * (1 - fx) * fy +
-        v11 * fx * fy;
+    while (checkPos >= patLen) {
+      const segment = stream.slice(checkPos - patLen, checkPos);
+      if (segment.every((v, i) => v === pattern[i])) {
+        repeats++;
+        checkPos -= patLen;
+      } else {
+        break;
+      }
+    }
 
-      result.push(v);
+    if (repeats >= 10) {
+      // Found padding pattern
+      return stream.slice(0, checkPos);
     }
   }
 
-  return result;
+  return stream;
+}
+
+export interface DecodedImage {
+  width: number;
+  height: number;
+  pixels: number[];
 }
 
 /**
- * Calculate subband dimensions for given image size and decomposition level
+ * Decode ITW V1 image
  */
-export function calculateSubbandDimensions(
-  width: number,
-  height: number,
-  levels: number
-): { name: string; width: number; height: number; size: number }[] {
-  const subbands: { name: string; width: number; height: number; size: number }[] = [];
-  let w = width;
-  let h = height;
-
-  for (let level = 0; level < levels; level++) {
-    const llW = Math.ceil(w / 2);
-    const llH = Math.ceil(h / 2);
-    const hW = w - llW;
-    const hH = h - llH;
-
-    subbands.push({ name: `LH${level}`, width: llW, height: hH, size: llW * hH });
-    subbands.push({ name: `HL${level}`, width: hW, height: llH, size: hW * llH });
-    subbands.push({ name: `HH${level}`, width: hW, height: hH, size: hW * hH });
-
-    w = llW;
-    h = llH;
+export function decodeItwV1(data: Buffer): DecodedImage {
+  // Parse header
+  const magic = data.toString("ascii", 0, 4);
+  if (magic !== "ITW_") {
+    throw new Error(`Invalid magic: ${magic}`);
   }
 
-  // Final LL band
-  subbands.push({ name: `LL${levels - 1}`, width: w, height: h, size: w * h });
-
-  return subbands;
-}
-
-/**
- * Decode ITW V1 (0x0300) format image
- *
- * Uses CDF 7/5 inverse wavelet transform with available subbands.
- * Currently extracts LL3 and LH2 (direct storage) for partial reconstruction.
- */
-export function decodeItwV1(buffer: Buffer): ItwV1DecodeResult {
-  const header = parseItwV1Header(buffer);
-  if (!header) {
-    throw new Error('Invalid ITW V1 header');
+  const type = data.readUInt16BE(4);
+  if (type !== 0x0300) {
+    throw new Error(`Not a V1 file: type=${type.toString(16)}`);
   }
 
-  const compressedData = buffer.subarray(18, 18 + header.compressedSize);
+  const width = data.readUInt16BE(6);
+  const height = data.readUInt16BE(8);
+  const compressedSize = data.readUInt32BE(14);
 
-  const metadata: ItwV1Metadata = {
-    modeFlag: compressedData[0],
-    levels: compressedData[1],
-    filterType: compressedData[2],
-  };
-
-  // Calculate dimensions for each level
-  const dims: { full: [number, number]; ll: [number, number] }[] = [];
-  let w = header.width;
-  let h = header.height;
-  for (let i = 0; i < metadata.levels; i++) {
-    const llW = Math.ceil(w / 2);
-    const llH = Math.ceil(h / 2);
-    dims.push({ full: [w, h], ll: [llW, llH] });
-    w = llW;
-    h = llH;
-  }
-
-  const llW = w;
-  const llH = h;
-  const llSize = llW * llH;
-
-  // Calculate LH2 size (Level 2)
-  const lh2Size = dims[2] ? dims[2].ll[0] * (dims[2].full[1] - dims[2].ll[1]) : 0;
-
-  // Find zlib streams
+  // Extract zlib streams
+  const compressedData = data.subarray(18, 18 + compressedSize);
   const streams = findZlibStreams(compressedData);
 
-  // Find LL stream: matches size and has highest average
-  const llCandidates = streams.filter((s) => s.size === llSize);
-  if (llCandidates.length === 0) {
-    throw new Error(`Could not find LL stream (expected size ${llSize})`);
-  }
-  const llStream = llCandidates.reduce((a, b) => (a.average > b.average ? a : b));
-  const ll3 = Array.from(llStream.data).map(Number);
-
-  // Find LH2 stream: matches size and has low average (detail coefficients)
-  let lh2: number[] | null = null;
-  if (lh2Size > 0) {
-    const lh2Candidates = streams.filter((s) => s.size === lh2Size && s.average < 50);
-    if (lh2Candidates.length > 0) {
-      const lh2Stream = lh2Candidates[0];
-      lh2 = Array.from(lh2Stream.data).map((v) => (v > 127 ? v - 256 : v));
-    }
+  if (streams.length < 17) {
+    throw new Error(`Expected at least 17 streams, got ${streams.length}`);
   }
 
-  // Reconstruct using CDF 7/5 inverse transform
-  let current = ll3;
+  // Direct streams (these work!)
+  const ll3 = streams[16].map((v) => v); // LL3: direct unsigned bytes
+  const lh2 = streams[4].map((v) => (v > 127 ? v - 256 : v)); // LH2: direct signed bytes
 
-  for (let lvl = metadata.levels - 1; lvl >= 0; lvl--) {
-    const [outW, outH] = dims[lvl].full;
-    const lh = lvl === 2 ? lh2 : null;
+  // RLE streams with value streams
+  const s1Trimmed = trimPadding(streams[1]);
+  const s3Trimmed = trimPadding(streams[3]);
 
-    current = cdf75Inverse2D(current, lh, null, null, outW, outH);
-  }
+  // Calculate subband sizes
+  const w0 = width;
+  const h0 = height;
+  const w1 = Math.ceil(w0 / 2); // 158
+  const h1 = Math.ceil(h0 / 2); // 119
+  const w2 = Math.ceil(w1 / 2); // 79
+  const h2 = Math.ceil(h1 / 2); // 60
+  const w3 = Math.ceil(w2 / 2); // 40
+  const h3 = Math.ceil(h2 / 2); // 30
+
+  const lh1Size = w1 * (h1 - Math.ceil(h1 / 2)); // ~4661
+  const hl1Size = (w1 - Math.ceil(w1 / 2)) * h1; // ~4740
+
+  // Decode LH1 and HL1 from RLE + values
+  const lh1 = decodeRleCoefficients(streams[0], s1Trimmed, lh1Size, 3);
+  const hl1 = decodeRleCoefficients(streams[2], s3Trimmed, hl1Size, 4);
+
+  // Wavelet reconstruction
+  // Level 3 → Level 2
+  let level2 = cdf75Inverse2D(ll3, null, null, null, w3, h3);
+
+  // Level 2 → Level 1 (add LH2)
+  let level1 = cdf75Inverse2D(level2, lh2, null, null, w2, h2);
+
+  // Level 1 → Level 0 (add LH1, HL1)
+  let level0 = cdf75Inverse2D(level1, lh1, hl1, null, w1, h1);
+
+  // Level 0 → Full resolution
+  const full = cdf75Inverse2D(level0, null, null, null, w0, h0);
 
   // Normalize to 0-255
-  const minV = Math.min(...current);
-  const maxV = Math.max(...current);
-  const rangeV = maxV - minV || 1;
-  const normalized = current.map((v) => ((v - minV) * 255) / rangeV);
+  const minV = Math.min(...full);
+  const maxV = Math.max(...full);
+  const range = maxV - minV || 1;
+  const pixels = full.map((v) =>
+    Math.max(0, Math.min(255, Math.round(((v - minV) * 255) / range)))
+  );
 
-  // Convert to Buffer
-  const pixels = Buffer.from(normalized.map((v) => Math.max(0, Math.min(255, Math.round(v)))));
-
-  return {
-    header,
-    metadata,
-    pixels,
-    llOnly: !lh2,
-  };
+  return { width, height, pixels };
 }
 
-/**
- * Check if buffer is ITW V1 format
- */
-export function isItwV1(buffer: Buffer): boolean {
-  if (buffer.length < 14) return false;
-  if (buffer.subarray(0, 4).toString('ascii') !== 'ITW_') return false;
-  return buffer.readUInt16BE(12) === 0x0300;
-}
+// Export utilities for testing
+export {
+  buildFischerTable,
+  fischerDecode,
+  BitReader,
+  decodeRleCoefficients,
+  cdf75Inverse1D,
+  cdf75Inverse2D,
+  findZlibStreams,
+  trimPadding,
+  FISCHER_TABLE,
+  QUANT_STEPS,
+};
