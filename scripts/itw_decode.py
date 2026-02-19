@@ -3,18 +3,19 @@
 ITW V1 (0x0300) Decoder - Reference Implementation
 
 Based on Ghidra reverse engineering of BMW TIS wavelet decoder.
-Currently decodes LL4 (deepest low-pass subband) with bilinear upscaling.
+Currently decodes LL4 + L3 details with bilinear upscaling.
 
-Stream structure:
-- Paired streams: even=positions (RLE), odd=values (Fischer probability)  
-- Direct streams: S16=LL4 (20x15), S4=L3 detail (40x30, zigzag)
-- Quantization: {8, 8, 4, 4, 4, 2, 2, 2, 1, 1, 1}
-- Filter type 0=CDF 9/7, type 1=custom 5/3
+Stream structure (for 316×238, 4 levels):
+- S0/S1, S2/S3: L1 details (position pairs + Fischer values)
+- S4: L3 LH detail (40×30, zigzag encoded)
+- S6, S8: L3 HL, HH details (zigzag)
+- S16: LL4 direct (20×15, raw bytes)
+- S17, S18: L4 details
 
-TODO:
-- Full wavelet reconstruction with all detail subbands
-- Fischer probability decoder implementation
-- Proper dequantization
+Limitations:
+- Fischer probability decoder not implemented
+- Only LL4 + L3 details used (L1/L2 require Fischer)
+- Output is blurry compared to original
 """
 
 import zlib
@@ -34,7 +35,6 @@ def extract_zlib_streams(payload: bytes) -> list[bytes]:
     i = 0
     
     while i < len(payload) - 2:
-        # Look for zlib header signatures
         if payload[i] == 0x78 and payload[i + 1] in [0x9c, 0xda, 0x01, 0x5e]:
             try:
                 obj = zlib.decompressobj()
@@ -59,16 +59,12 @@ def create_png(pixels: list[int], width: int, height: int) -> bytes:
     def chunk(name: bytes, data: bytes) -> bytes:
         return struct.pack('>I', len(data)) + name + data + struct.pack('>I', crc32(name + data))
     
-    # PNG signature
     sig = b'\x89PNG\r\n\x1a\n'
-    
-    # IHDR: width, height, bit depth, color type, compression, filter, interlace
     ihdr = struct.pack('>IIBBBBB', width, height, 8, 0, 0, 0, 0)
     
-    # IDAT: filtered scanlines
     raw = b''
     for y in range(height):
-        raw += b'\x00'  # Filter type 0 (none)
+        raw += b'\x00'
         for x in range(width):
             raw += bytes([pixels[y * width + x]])
     
@@ -89,7 +85,6 @@ def bilinear_upscale(src: list[list[float]], dst_w: int, dst_h: int) -> list[lis
     
     for y in range(dst_h):
         for x in range(dst_w):
-            # Map to source coordinates
             src_x = x * (src_w - 1) / max(1, dst_w - 1)
             src_y = y * (src_h - 1) / max(1, dst_h - 1)
             
@@ -101,7 +96,6 @@ def bilinear_upscale(src: list[list[float]], dst_w: int, dst_h: int) -> list[lis
             fx = src_x - x0
             fy = src_y - y0
             
-            # Bilinear interpolation
             v = (src[y0][x0] * (1 - fx) * (1 - fy) +
                  src[y0][x1] * fx * (1 - fy) +
                  src[y1][x0] * (1 - fx) * fy +
@@ -138,7 +132,7 @@ def decode_itw_v1(data: bytes) -> tuple[int, int, list[int]]:
     
     print(f"ITW V1: {width}×{height}, filter={filter_type}, levels={levels}")
     
-    # Extract zlib streams (skip 3-byte header)
+    # Extract zlib streams (skip header bytes)
     streams = extract_zlib_streams(payload[3:])
     print(f"Found {len(streams)} streams")
     
@@ -148,33 +142,42 @@ def decode_itw_v1(data: bytes) -> tuple[int, int, list[int]]:
         w, h = dims[-1]
         dims.append(((w + 1) // 2, (h + 1) // 2))
     
-    # Find LL4 stream (S16 for standard 4-level decomposition)
-    ll4_w, ll4_h = dims[levels]
-    ll4_size = ll4_w * ll4_h
+    # Get LL4 (deepest LL)
+    l4_w, l4_h = dims[levels]
+    ll4_idx = 16  # Standard position for 4-level decomposition
     
-    ll4_stream = None
-    for idx, s in enumerate(streams):
-        if len(s) == ll4_size:
-            # Check if it looks like direct values (not sparse/RLE)
-            raw = list(s)
-            zero_pct = raw.count(0) / len(raw)
-            mean = sum(raw) / len(raw)
-            
-            # LL should have low zero count and moderate mean
-            if zero_pct < 0.1 and 20 < mean < 150:
-                ll4_stream = s
-                print(f"LL4 found at S{idx}: {len(s)} bytes, range {min(raw)}-{max(raw)}")
-                break
+    if ll4_idx >= len(streams):
+        raise ValueError(f"LL4 stream not found at index {ll4_idx}")
     
-    if ll4_stream is None:
-        raise ValueError(f"Could not find LL4 stream (expected {ll4_size} bytes)")
+    ll4_stream = list(streams[ll4_idx])
+    if len(ll4_stream) != l4_w * l4_h:
+        print(f"Warning: LL4 size mismatch: {len(ll4_stream)} vs {l4_w * l4_h}")
     
-    # Convert to 2D array
-    ll4_data = list(ll4_stream)
-    ll4_2d = [[float(ll4_data[y * ll4_w + x]) for x in range(ll4_w)] for y in range(ll4_h)]
+    ll4_2d = [[float(ll4_stream[y * l4_w + x]) for x in range(l4_w)] for y in range(l4_h)]
+    print(f"LL4: {l4_w}×{l4_h}, range {min(ll4_stream)}-{max(ll4_stream)}")
     
-    # Bilinear upscale to full resolution
-    upscaled = bilinear_upscale(ll4_2d, width, height)
+    # Get L3 LH detail (S4) if available
+    l3_w, l3_h = dims[levels - 1]
+    if len(streams) > 4 and len(streams[4]) == l3_w * l3_h:
+        l3_lh_raw = [zigzag_decode(b) for b in streams[4]]
+        l3_lh = [[l3_lh_raw[y * l3_w + x] for x in range(l3_w)] for y in range(l3_h)]
+        
+        # Upscale LL4 to L3 size
+        ll_at_l3 = bilinear_upscale(ll4_2d, l3_w, l3_h)
+        
+        # Add L3 LH detail (quantization factor 2)
+        quant = 2
+        for y in range(l3_h):
+            for x in range(l3_w):
+                ll_at_l3[y][x] += l3_lh[y][x] * quant
+        
+        # Upscale to full resolution
+        upscaled = bilinear_upscale(ll_at_l3, width, height)
+        print(f"Used L3 LH detail")
+    else:
+        # Fallback: LL4 only
+        upscaled = bilinear_upscale(ll4_2d, width, height)
+        print(f"LL4 only (no L3 detail)")
     
     # Normalize to 0-255
     flat = [upscaled[y][x] for y in range(height) for x in range(width)]
@@ -193,6 +196,8 @@ def decode_itw_v1(data: bytes) -> tuple[int, int, list[int]]:
 def main():
     if len(sys.argv) < 2:
         print("Usage: itw_decode.py <input.itw> [output.png]")
+        print("\nDecodes BMW TIS ITW V1 (0x0300) wavelet-compressed images.")
+        print("Output is blurry without Fischer decoder (L1/L2 details).")
         sys.exit(1)
     
     input_path = Path(sys.argv[1])
