@@ -1,0 +1,59 @@
+# ITW V1 Decompiled Analysis
+
+## Quantization Steps (per subband)
+```
+Index  Subband  Step
+0      LH1      8
+1      HL1      8
+2      LH2      4
+3      HL2      4
+4      HH2      4
+5      LH3      2
+6      HL3      2
+7      HH3      2
+8      LH4      1
+9      HL4      1
+10     HH4      1
+11     LL4      (special - direct storage)
+```
+
+## Stream Organization (12 subbands)
+- Subbands 0-10: Detail coefficients (RLE + Fischer encoded)
+- Subband 11: LL4 (direct float values, normalized to 0-255)
+
+## Dequantization Formula
+```c
+fVar8 = (quant_step / max_range) * global_scale;
+coeff = raw_value * (fVar8 / scale_factor) + dc_offset;
+
+// scale_factor from FUN_004b8a40:
+scale_factor = (16.0 - param) * 0.0625;  // range 0-1
+```
+
+## Fischer Decode (FUN_004bbdf0)
+Uses 2D lookup table from FUN_004b8a60 with dimensions [9][201].
+The table contains cumulative sums for combinatorial indexing.
+
+Key sequences at offset 0x7c (row 2):
+```
+1, 5, 13, 25, 41, 61, 85, 113, 145, 181, 221, 265, 313, 365, 421, 481, ...
+```
+These are centered octagonal numbers: `2n² + 2n + 1`
+
+## Wavelet Filter Selection
+FUN_004b7720 selects filter based on param:
+- param=0: 9/7 filter (Daubechies)
+- param=1: 5/3 filter (LeGall/CDF 5/3)
+
+ITW V1 uses param=1 (5/3 filter).
+
+## CDF 5/3 Filter Coefficients
+From FUN_004b7770:
+```c
+// Lowpass analysis: {-1/8, 1/4, 3/4, 1/4, -1/8} (scaled by sqrt(2))
+// Highpass analysis: {-1/2, 1, -1/2}
+```
+
+## Bit Stream Reading
+FUN_004bc220 reads `param_1` bits LSB-first from the current position.
+FUN_004bc1d0 reads single bit, auto-advances byte on 8th bit.
