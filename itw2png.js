@@ -2,6 +2,9 @@
 /**
  * ITW to PNG decoder
  * Based on tis.exe decompilation
+ * 
+ * Current status: LL-only decoding (blurry but recognizable)
+ * TODO: Full wavelet reconstruction with sparse subbands
  */
 import fs from 'node:fs';
 import zlib from 'node:zlib';

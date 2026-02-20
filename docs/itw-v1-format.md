@@ -1,126 +1,120 @@
-# ITW V1 (0x0300) Format Analysis
+# ITW File Format (V1 - 0x0300 Wavelet)
 
-Based on Ghidra reverse engineering of BMW TIS wavelet decoder.
+Based on reverse engineering of `tis.exe` from BMW TIS documentation system.
 
-## File Structure
+## Header (14 bytes)
 
-```
-Offset  Size  Description
-------  ----  -----------
-0       4     Magic "ITW_"
-6       2     Width (BE)
-8       2     Height (BE)
-12      2     Version (0x0300)
-14      4     Compressed size (BE)
-18      N     Payload (NOT zlib-compressed as a whole)
-```
+| Offset | Size | Field | Notes |
+|--------|------|-------|-------|
+| 0x00 | 4 | Magic | `ITW_` |
+| 0x04 | 2 | Version | Big-endian, typically 0x0100 |
+| 0x06 | 2 | Width | Big-endian |
+| 0x08 | 2 | Height | Big-endian |
+| 0x0A | 2 | Bits | Big-endian, typically 8 |
+| 0x0C | 2 | Compression | 0x0300 = V1 wavelet, 0x0400 = V2 LZW |
 
-## Payload Structure
+## V1 Wavelet Format (0x0300)
 
-```
-Offset  Size  Description
-------  ----  -----------
-0       1     Filter type (0=CDF 9/7, 1=custom 5/3)
-1       1     Decomposition levels (3 or 4)
-2       1     Additional filter parameter
-3       74    Block/stream table
-77+     N     Multiple zlib-compressed streams
-```
+After header:
 
-## Stream Mapping (for 316×238, 4 levels)
+| Offset | Size | Field |
+|--------|------|-------|
+| 0x0E | 4 | Compressed size (BE) |
+| 0x12 | N | Compressed data |
 
-19 zlib streams found:
+### Compressed Data Structure
 
-| Stream | Bytes | Description |
-|--------|-------|-------------|
-| S0 | 2380 | L1 LH positions (RLE, 74% zeros) |
-| S1 | 996 | L1 LH values (Fischer coded) |
-| S2 | 2528 | L1 HL positions |
-| S3 | 1470 | L1 HL values |
-| S4 | 1200 | L3 LH detail (40×30, zigzag) |
-| S5 | 782 | Fischer values |
-| S6 | 1264 | L3 HL detail? (zigzag) |
-| S7 | 1093 | Fischer values |
-| S8 | 1264 | L3 HH detail? (zigzag) |
-| S9-S15 | var | L2 details (Fischer coded) |
-| S16 | 300 | **LL4 direct** (20×15, range 21-80) |
-| S17 | 320 | L4 HL? (20×15+pad, zigzag) |
-| S18 | 300 | L4 LH? (20×15, zigzag) |
+First 3 bytes are metadata:
+- Byte 0: Filter type (0 = CDF 9/7)
+- Byte 1: Number of levels (typically 4)
+- Byte 2: Quantization parameter
 
-## Encoding Schemes
+Following metadata: 77-byte block with subband parameters.
 
-### Direct Streams (quant step < 2)
-- LL4 (S16): Raw byte values, range ~20-80
-- L3/L4 details: Zigzag encoded signed integers
-  - `decode(n) = (n >> 1) ^ -(n & 1)`
+### Zlib Streams
 
-### Sparse Streams (quant step >= 2)
-Paired RLE + Fischer probability coding:
+The compressed data contains 19 zlib streams:
 
-**Position stream (even):**
-- High zero percentage (50-80%)
-- If `byte & 0x80`: 4 extra bits follow
-- Lower 7 bits = position/skip info
+| Stream | Size | Content |
+|--------|------|---------|
+| 0 | 2380 | L1 positions (RLE) |
+| 1 | 996 | L1 values (Fischer coded) |
+| 2 | 2528 | L1 positions |
+| 3 | 1470 | L1 values |
+| 4 | 1200 | L3 detail (40×30) |
+| 5 | 782 | L3 values |
+| 6-15 | varies | L2/L3 subbands |
+| **16** | **300** | **LL4 (20×15)** - lowest frequency |
+| 17 | 320 | L4 detail (padded) |
+| 18 | 300 | L4 detail |
 
-**Value stream (odd):**
-- Mean ~100-130
-- Fischer probability coded
-- Uses 9×201 cumulative probability table
+### Wavelet Levels
 
-## Quantization Steps
+For 316×238 image with 4 levels:
 
-```
-Index  Step  Subband
------  ----  -------
-0      8     LH1
-1      8     HL1
-2      4     LH2
-3      4     HL2
-4      4     HH2
-5      2     LH3
-6      2     HL3
-7      2     HH3
-8      1     LH4
-9      1     HL4
-10     1     HH4/LL4
-```
+| Level | Dimensions | Pixels |
+|-------|-----------|--------|
+| L1 | 158×119 | 18,802 |
+| L2 | 79×60 | 4,740 |
+| L3 | 40×30 | 1,200 |
+| L4 | 20×15 | 300 |
 
-## Filter Coefficients
+### Stream Types
 
-### Filter Type 0: CDF 9/7 (JPEG 2000 lossy)
-```
-Analysis:  [0.053, -0.033, -0.093, 0.387, 0.387, -0.093, -0.033, 0.053]
-Synthesis: [-0.087, -0.055, 0.440, 0.817, 0.440, -0.055, -0.087]
-```
+- **Even streams (0,2,4...)**: Positions - sparse encoding with RLE
+  - Low mean (~5-13)
+  - Values indicate skip counts
+  
+- **Odd streams (1,3,5...)**: Values - entropy coded coefficients
+  - High mean (~100-115)
+  - Fischer/arithmetic coding
+  
+- **Stream 16**: LL (lowest level) - direct coefficients
+  - Mean ~50
+  - Narrow range (e.g., 21-80)
+  - Can be upscaled for preview image
 
-### Filter Type 1: Custom 5/3 (NOT standard LeGall!)
-```
-Analysis:  [-0.011, -0.054, 0.261, 0.607, 0.261, -0.054, -0.011]
-Synthesis: [-0.05, 0.25, 0.6, 0.25, -0.05]
-```
+## Sparse Encoding
 
-## Current Implementation Status
+Details subbands use sparse encoding:
+- Position stream: RLE with format TBD
+- Value stream: Fischer probability coding
 
-✅ Working:
-- File header parsing
-- Zlib stream extraction
-- LL4 direct value decoding
-- Bilinear upscale from LL4
-- Zigzag decoding for L3/L4 details
+Fischer coding (from tis.exe):
+- Bit-by-bit reading
+- Probability table based on triangular distribution
+- Expands compressed values to full subband
 
-❌ Not implemented:
-- Fischer probability decoder
-- RLE position decoder
-- Full inverse wavelet reconstruction
-- L1/L2 detail decoding
+## Current Decoder Status
 
-## References
+✅ **Working**: LL-only decoding
+- Extracts stream 16 (LL4)
+- Bilinear/Lanczos upscale to full resolution
+- Produces recognizable but blurry image
 
-- Ghidra decompilation: `re.c`
-- Test file: `GRAFIK/1/03/95/26.ITW` (316×238)
-- Key functions:
-  - `FUN_004b5b30`: V1 main decoder
-  - `FUN_004b7970`: Wavelet decomposition
-  - `FUN_004b7770`: Filter coefficient setup
-  - `FUN_004bbdf0`: Fischer decode
-  - `FUN_004b8a60`: Probability table initialization
+❌ **TODO**: Full wavelet reconstruction
+- Decode sparse subbands (streams 0-15)
+- Apply inverse CDF 5/3 wavelet transform
+- Sharp, detailed output
+
+## Related Functions in tis.exe
+
+| Address | Function |
+|---------|----------|
+| 0x004b5290 | ITWOpen |
+| 0x004b5170 | ITWRead |
+| 0x004b5350 | ITWClose |
+| 0x004b5b30 | V1 decoder entry |
+| 0x004b7970 | Wavelet reconstruction |
+| 0x004b72b0 | Subband decoder |
+| 0x004bc220 | Bit reader (N bits) |
+| 0x004bc0f0 | Byte reader |
+| 0x004bd1e0 | Inverse wavelet |
+
+## Test Files
+
+Sample: `/Users/emdzej/Documents/tis/GRAFIK/1/03/95/26.ITW`
+- 316×238, 8bpp
+- V1 format (0x0300)
+- Compressed size: 8335 bytes
+- 19 zlib streams
