@@ -4,7 +4,17 @@
  * Based on tis.exe decompilation
  * 
  * Current status: LL-only decoding (blurry but recognizable)
- * TODO: Full wavelet reconstruction with sparse subbands
+ * 
+ * Format V1 (0x0300) structure:
+ * - 19 zlib streams
+ * - Stream 16: LL4 (20x15 direct coefficients)
+ * - Streams 0-15: sparse subbands (position + value pairs)
+ * - Streams 17-18: L4 details
+ * 
+ * TODO: Full wavelet reconstruction requires:
+ * - Decoding sparse position/value streams (FUN_004b72b0)
+ * - Fischer/arithmetic value decoding
+ * - CDF 5/3 inverse wavelet transform
  */
 import fs from 'node:fs';
 import zlib from 'node:zlib';
