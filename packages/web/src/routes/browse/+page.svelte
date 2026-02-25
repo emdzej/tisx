@@ -1,8 +1,8 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
 	import GroupTree from './GroupTree.svelte';
+	import { browser } from '$app/environment';
 
 	type DocType = {
 		id: number;
@@ -195,9 +195,15 @@
 		}
 	};
 
-	onMount(() => {
-		loadDocTypes();
-		loadVehicleNames();
+	let initialized = false;
+
+	$effect(() => {
+		if (browser && !initialized) {
+			initialized = true;
+			console.log('Browse page effect running, loading data...');
+			loadDocTypes();
+			loadVehicleNames();
+		}
 	});
 </script>
 
