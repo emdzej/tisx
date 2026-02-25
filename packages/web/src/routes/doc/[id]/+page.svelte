@@ -6,7 +6,13 @@
 
 	const md = new MarkdownIt({ html: true, breaks: true });
 
-	// Convert Pandoc grid tables to pipe tables
+	// Check if content has complex grid tables (nested)
+	function hasComplexGridTables(text: string): boolean {
+		// Nested tables have multiple +--- on same line or very wide tables
+		return /\+[-=+]{50,}/.test(text) || /\|\s*\+[-=+]+/.test(text);
+	}
+
+	// Convert simple Pandoc grid tables to pipe tables
 	function convertGridTables(text: string): string {
 		// Match grid table blocks
 		const gridTableRegex = /^\+[-=+]+\+\n([\s\S]*?)^\+[-+]+\+$/gm;
@@ -138,8 +144,13 @@
 			const payload = (await response.json()) as { content?: string };
 			textContent = payload.content ?? '';
 			if (textContent) {
-				const processed = convertGridTables(textContent);
-				renderedHtml = md.render(processed);
+				if (hasComplexGridTables(textContent)) {
+					// Complex tables - render as preformatted
+					renderedHtml = `<pre class="whitespace-pre-wrap font-mono text-xs leading-relaxed overflow-x-auto">${textContent.replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
+				} else {
+					const processed = convertGridTables(textContent);
+					renderedHtml = md.render(processed);
+				}
 			}
 		} catch {
 			textError = true;
