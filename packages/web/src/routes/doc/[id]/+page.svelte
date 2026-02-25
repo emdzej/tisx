@@ -1,6 +1,7 @@
 <script lang="ts">
-	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { browser } from '$app/environment';
+	import { marked } from 'marked';
 	import type { PageProps } from './$types';
 
 	type DocumentDetail = {
@@ -30,16 +31,19 @@
 	const { params } = $props<PageProps>();
 	const { id } = params;
 
-	let loading = true;
-	let error = '';
-	let document: DocumentDetail | null = null;
-	let file: DocumentFile | null = null;
-	let imageUrl: string | null = null;
-	let textUrl: string | null = null;
+	let loading = $state(true);
+	let error = $state('');
+	let document = $state<DocumentDetail | null>(null);
+	let file = $state<DocumentFile | null>(null);
+	let imageUrl = $state<string | null>(null);
+	let textUrl = $state<string | null>(null);
 	const placeholderImageUrl = '/assets/placeholder.svg';
-	let textError = false;
-	let textLoading = false;
-	let textContent = '';
+	let textError = $state(false);
+	let textLoading = $state(false);
+	let textContent = $state('');
+	let initialized = $state(false);
+
+	const renderedHtml = $derived(textContent ? marked.parse(textContent) : '');
 
 	const normalizeAssetPath = (path: string, base: string) => {
 		const cleaned = path
@@ -61,7 +65,7 @@
 		return raw;
 	};
 
-	const loadTextContent = async (url: string) => {
+	async function loadTextContent(url: string) {
 		textError = false;
 		textLoading = true;
 		textContent = '';
@@ -75,9 +79,9 @@
 		} finally {
 			textLoading = false;
 		}
-	};
+	}
 
-	const loadDocument = async () => {
+	async function loadDocument() {
 		loading = true;
 		error = '';
 		textError = false;
@@ -97,8 +101,7 @@
 			imageUrl = graphicPath
 				? normalizeAssetPath(graphicPath, '/assets/images')
 				: placeholderImageUrl;
-			textUrl = file?.textUrl ??
-				(textPath ? `/api/docs/${textPath.replace(/^\/+/, '')}` : null);
+			textUrl = file?.textUrl ?? (textPath ? normalizeAssetPath(textPath, '/api/docs') : null);
 
 			if (textUrl) {
 				await loadTextContent(textUrl);
@@ -112,17 +115,26 @@
 		} finally {
 			loading = false;
 		}
-	};
+	}
 
-	const handleBack = () => {
+	function handleBack() {
 		if (typeof history !== 'undefined' && history.length > 1) {
 			history.back();
 			return;
 		}
 		goto('/browse');
-	};
+	}
 
-	onMount(loadDocument);
+	function handleImageError() {
+		imageUrl = placeholderImageUrl;
+	}
+
+	$effect(() => {
+		if (browser && !initialized) {
+			initialized = true;
+			loadDocument();
+		}
+	});
 </script>
 
 <section class="space-y-6">
@@ -143,7 +155,7 @@
 		<button
 			type="button"
 			class="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950/60 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-600 hover:text-white"
-			on:click={handleBack}
+			onclick={handleBack}
 		>
 			<span aria-hidden="true">←</span>
 			Back
@@ -168,7 +180,7 @@
 							src={imageUrl}
 							alt={document?.title ?? 'Document graphic'}
 							class="mx-auto max-h-[70vh] w-auto origin-center transition-transform duration-300 group-hover:scale-105"
-							on:error={() => (imageUrl = placeholderImageUrl)}
+							onerror={handleImageError}
 						/>
 						<p class="mt-2 text-xs text-slate-500">Scroll to pan, hover to zoom.</p>
 					</div>
@@ -182,9 +194,9 @@
 			<div class="space-y-3">
 				<h2 class="text-lg font-semibold text-white">Text content</h2>
 				{#if textUrl && !textError && !textLoading}
-					<article class="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 text-sm text-slate-200">
-						{#if textContent}
-							<pre class="whitespace-pre-wrap font-sans leading-relaxed">{textContent}</pre>
+					<article class="prose prose-invert prose-sm max-w-none rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
+						{#if renderedHtml}
+							{@html renderedHtml}
 						{:else}
 							<p class="text-slate-400">Text file was empty.</p>
 						{/if}
