@@ -20,8 +20,11 @@ const __dirname = dirname(__filename);
 
 const dbPath =
   process.env.TIS_DB_PATH ?? join(os.homedir(), 'Documents', 'tis.sqlite');
+const docsDbPath =
+  process.env.DOCS_DB_PATH ?? join(os.homedir(), 'Documents', 'docs.sqlite');
 
 const db = new Database(dbPath);
+const docsDb = new Database(docsDbPath, { readonly: true });
 
 const app = express();
 app.use(cors());
@@ -32,6 +35,25 @@ app.use('/assets', express.static(assetsPath));
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
+});
+
+app.get('/api/docs/*', (req, res) => {
+  const docId = req.params[0];
+  if (!docId) {
+    res.status(400).json({ error: 'Invalid document path' });
+    return;
+  }
+
+  const row = docsDb
+    .prepare('SELECT content FROM content WHERE id = ?')
+    .get(docId) as { content: string } | undefined;
+
+  if (!row) {
+    res.status(404).json({ error: 'Document not found' });
+    return;
+  }
+
+  res.json({ content: row.content });
 });
 
 const parseId = (value: string): number | null => {
@@ -278,7 +300,8 @@ app.get('/api/document/:id', (req, res) => {
   ).map((file) => ({
     ...file,
     graphicsPath: `GRAFIK/${file.filename}.ITW`,
-    textPath: `TEXT/${file.filename}.xml`,
+    textPath: `DOCS/${file.filename}.md`,
+    textUrl: `/api/docs/DOCS/${file.filename}.md`,
   }));
 
   const response: DocumentResponse = {
@@ -294,9 +317,11 @@ app.listen(port, () => {
   // eslint-disable-next-line no-console
   console.log(`Server listening on port ${port}`);
   console.log(`SQLite database: ${dbPath}`);
+  console.log(`Docs database: ${docsDbPath}`);
 });
 
 process.on('SIGINT', () => {
   db.close();
+  docsDb.close();
   process.exit(0);
 });

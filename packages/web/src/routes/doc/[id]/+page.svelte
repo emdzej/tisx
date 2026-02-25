@@ -19,6 +19,7 @@
 		graphicsPath?: string;
 		grafikPath?: string;
 		textPath?: string;
+		textUrl?: string;
 	};
 
 	type DocumentResponse = {
@@ -35,7 +36,7 @@
 	let file: DocumentFile | null = null;
 	let imageUrl: string | null = null;
 	let textUrl: string | null = null;
-	let imageError = false;
+	const placeholderImageUrl = '/assets/placeholder.svg';
 	let textError = false;
 	let textLoading = false;
 	let textContent = '';
@@ -67,7 +68,8 @@
 		try {
 			const response = await fetch(url);
 			if (!response.ok) throw new Error('Text not found');
-			textContent = await response.text();
+			const payload = (await response.json()) as { content?: string };
+			textContent = payload.content ?? '';
 		} catch {
 			textError = true;
 		} finally {
@@ -78,7 +80,6 @@
 	const loadDocument = async () => {
 		loading = true;
 		error = '';
-		imageError = false;
 		textError = false;
 		textLoading = false;
 		try {
@@ -93,8 +94,11 @@
 
 			const graphicPath = file?.graphicsPath ?? file?.grafikPath ?? '';
 			const textPath = file?.textPath ?? '';
-			imageUrl = graphicPath ? normalizeAssetPath(graphicPath, '/assets/images') : null;
-			textUrl = textPath ? normalizeAssetPath(textPath, '/assets/docs') : null;
+			imageUrl = graphicPath
+				? normalizeAssetPath(graphicPath, '/assets/images')
+				: placeholderImageUrl;
+			textUrl = file?.textUrl ??
+				(textPath ? `/api/docs/${textPath.replace(/^\/+/, '')}` : null);
 
 			if (textUrl) {
 				await loadTextContent(textUrl);
@@ -158,13 +162,13 @@
 		<div class="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
 			<div class="space-y-3">
 				<h2 class="text-lg font-semibold text-white">Graphics</h2>
-				{#if imageUrl && !imageError}
+				{#if imageUrl}
 					<div class="group relative overflow-auto rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
 						<img
 							src={imageUrl}
 							alt={document?.title ?? 'Document graphic'}
 							class="mx-auto max-h-[70vh] w-auto origin-center transition-transform duration-300 group-hover:scale-105"
-							on:error={() => (imageError = true)}
+							on:error={() => (imageUrl = placeholderImageUrl)}
 						/>
 						<p class="mt-2 text-xs text-slate-500">Scroll to pan, hover to zoom.</p>
 					</div>

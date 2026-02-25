@@ -46,6 +46,7 @@ export interface DocumentFile {
   deviceCode: string | null;
   graphicsPath: string;
   textPath: string;
+  textUrl: string;
 }
 
 export interface DocumentDetail {
