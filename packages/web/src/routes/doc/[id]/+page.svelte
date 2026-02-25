@@ -1,8 +1,71 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { browser } from '$app/environment';
-	import { marked } from 'marked';
+	import MarkdownIt from 'markdown-it';
 	import type { PageProps } from './$types';
+
+	const md = new MarkdownIt({ html: true, breaks: true });
+
+	// Convert Pandoc grid tables to pipe tables
+	function convertGridTables(text: string): string {
+		// Match grid table blocks
+		const gridTableRegex = /^\+[-=+]+\+\n([\s\S]*?)^\+[-+]+\+$/gm;
+		
+		return text.replace(gridTableRegex, (match) => {
+			const lines = match.split('\n').filter(line => line.trim());
+			const rows: string[][] = [];
+			let currentRow: string[] = [];
+			let isHeader = false;
+			let headerSeparatorFound = false;
+			
+			for (const line of lines) {
+				if (line.startsWith('+')) {
+					if (line.includes('=')) {
+						isHeader = true;
+						headerSeparatorFound = true;
+					}
+					if (currentRow.length > 0) {
+						rows.push([...currentRow]);
+						currentRow = [];
+					}
+					continue;
+				}
+				if (line.startsWith('|')) {
+					const cells = line.split('|').slice(1, -1).map(c => c.trim());
+					if (currentRow.length === 0) {
+						currentRow = cells;
+					} else {
+						cells.forEach((cell, i) => {
+							if (currentRow[i]) {
+								currentRow[i] += ' ' + cell;
+							} else {
+								currentRow[i] = cell;
+							}
+						});
+					}
+				}
+			}
+			if (currentRow.length > 0) {
+				rows.push(currentRow);
+			}
+			
+			if (rows.length === 0) return match;
+			
+			// Build pipe table
+			const result: string[] = [];
+			const colCount = Math.max(...rows.map(r => r.length));
+			
+			rows.forEach((row, idx) => {
+				const paddedRow = Array(colCount).fill('').map((_, i) => row[i] || '');
+				result.push('| ' + paddedRow.join(' | ') + ' |');
+				if (idx === 0 && headerSeparatorFound) {
+					result.push('| ' + paddedRow.map(() => '---').join(' | ') + ' |');
+				}
+			});
+			
+			return result.join('\n');
+		});
+	}
 
 	type DocumentDetail = {
 		id: number;
@@ -75,7 +138,8 @@
 			const payload = (await response.json()) as { content?: string };
 			textContent = payload.content ?? '';
 			if (textContent) {
-				renderedHtml = await marked.parse(textContent);
+				const processed = convertGridTables(textContent);
+				renderedHtml = md.render(processed);
 			}
 		} catch {
 			textError = true;
