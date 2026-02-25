@@ -150,7 +150,7 @@ const main = async () => {
 
     const rows = queryAll<Engine>(
       db,
-      'SELECT DISTINCT t.MOTOR_ID as id, b.BENENNUNG as code FROM TFZGTYP t LEFT JOIN TBENENNUNG b ON t.MOTOR_ID = b.KEY WHERE t.MODELL_ID = ? ORDER BY b.BENENNUNG;',
+      'SELECT DISTINCT t.MOTOR_ID as id, b.BENENNUNG as name FROM TFZGTYP t LEFT JOIN TBENENNUNG b ON t.MOTOR_ID = b.KEY WHERE t.MODELL_ID = ? ORDER BY b.BENENNUNG;',
       [modelId],
     );
 

@@ -14,7 +14,7 @@ export interface Model {
 
 export interface Engine {
   id: number;
-  code: string | null;
+  name: string | null;
 }
 
 export interface DocType {
