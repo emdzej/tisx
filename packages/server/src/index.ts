@@ -99,7 +99,7 @@ const main = async () => {
       return;
     }
 
-    const row = queryGet<{ content: string }>(
+    const row = queryGet<{ content: string | Uint8Array }>(
       docsDb,
       'SELECT content FROM content WHERE id = ?',
       [docId],
@@ -110,7 +110,19 @@ const main = async () => {
       return;
     }
 
-    res.json({ content: row.content });
+    // sql.js returns binary as Uint8Array, convert to string
+    let content: string;
+    if (row.content instanceof Uint8Array) {
+      content = new TextDecoder('utf-8').decode(row.content);
+    } else if (typeof row.content === 'object' && row.content !== null) {
+      // Handle object with numeric keys (Buffer-like)
+      const bytes = Object.values(row.content as Record<string, number>);
+      content = new TextDecoder('utf-8').decode(new Uint8Array(bytes));
+    } else {
+      content = String(row.content ?? '');
+    }
+
+    res.json({ content });
   });
 
   app.get('/api/series', (_req, res) => {
