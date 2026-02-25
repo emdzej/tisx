@@ -1,0 +1,15 @@
+**/node_modules
+**/dist
+**/build
+**/.svelte-kit
+**/.turbo
+**/.cache
+**/.pnpm-store
+.git
+.gitignore
+.DS_Store
+data
+*.log
+npm-debug.log*
+pnpm-debug.log*
+README.md
