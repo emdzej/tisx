@@ -5,6 +5,7 @@ import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
+import { execSync } from 'node:child_process';
 import type {
   DocType,
   DocumentDetail,
@@ -94,6 +95,8 @@ const main = async () => {
 
   app.get('/api/docs/*', (req, res) => {
     const docId = req.params[0];
+    const format = req.query.format as string | undefined;
+    
     if (!docId) {
       res.status(400).json({ error: 'Invalid document path' });
       return;
@@ -120,6 +123,22 @@ const main = async () => {
       content = new TextDecoder('utf-8').decode(new Uint8Array(bytes));
     } else {
       content = String(row.content ?? '');
+    }
+
+    // Convert to HTML using Pandoc if requested
+    if (format === 'html') {
+      try {
+        const html = execSync('pandoc -f markdown -t html', {
+          input: content,
+          encoding: 'utf-8',
+          maxBuffer: 10 * 1024 * 1024, // 10MB
+        });
+        res.json({ content: html });
+      } catch (err) {
+        console.error('Pandoc conversion failed:', err);
+        res.json({ content }); // Fallback to raw markdown
+      }
+      return;
     }
 
     res.json({ content });
