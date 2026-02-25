@@ -61,14 +61,14 @@
 		return raw;
 	};
 
-	const fetchJson = async <T,>(endpoint: string): Promise<T> => {
-		const res = await fetch(endpoint);
+	async function fetchJson<T>(path: string): Promise<T> {
+		const res = await fetch(path);
 		if (!res.ok) {
 			const payload = await res.json().catch(() => ({}));
 			throw new Error(payload?.error ?? `Request failed (${res.status})`);
 		}
 		return res.json() as Promise<T>;
-	};
+	}
 
 	const loadDocTypes = async () => {
 		console.log('loadDocTypes called');
