@@ -20,8 +20,8 @@ import type {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const dbPath = process.env.TIS_DB_PATH ?? '/data/tis.sqlite';
-const docsDbPath = process.env.DOCS_DB_PATH ?? '/data/docs.sqlite';
+const dbPath = process.env.TIS_DB_PATH ?? './data/tis.sqlite';
+const docsDbPath = process.env.DOCS_DB_PATH ?? './data/docs.sqlite';
 
 const parseId = (value: string): number | null => {
   const id = Number.parseInt(value, 10);
