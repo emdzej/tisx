@@ -71,15 +71,19 @@
 	};
 
 	const loadDocTypes = async () => {
+		console.log('loadDocTypes called');
 		loadingDocTypes = true;
 		docTypeError = '';
 		try {
+			console.log('Fetching /api/doctypes...');
 			docTypes = await fetchJson<DocType[]>('/api/doctypes');
+			console.log('Got docTypes:', docTypes);
 			activeDocType = docTypes[0] ?? null;
 			if (activeDocType) {
 				await loadRootGroups(activeDocType.id);
 			}
 		} catch (error) {
+			console.error('loadDocTypes error:', error);
 			docTypeError = (error as Error).message;
 		} finally {
 			loadingDocTypes = false;
@@ -189,7 +193,7 @@
 		}
 	};
 
-	let initialized = false;
+	let initialized = $state(false);
 
 	$effect(() => {
 		if (browser && !initialized) {
