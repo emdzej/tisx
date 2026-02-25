@@ -61,8 +61,8 @@
 		return raw;
 	};
 
-	const fetchJson = async <T,>(url: string): Promise<T> => {
-		const res = await fetch(url);
+	const fetchJson = async <T,>(endpoint: string): Promise<T> => {
+		const res = await fetch(endpoint);
 		if (!res.ok) {
 			const payload = await res.json().catch(() => ({}));
 			throw new Error(payload?.error ?? `Request failed (${res.status})`);
