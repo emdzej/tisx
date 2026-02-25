@@ -27,19 +27,13 @@
 		publicationDate: number | null;
 	};
 
-	let seriesId = '';
-	let modelId = '';
-	let engineId = '';
 	let seriesName = '';
 	let modelName = '';
 	let engineName = '';
 
-	$: {
-		const params = $page?.url?.searchParams;
-		seriesId = params?.get('series') ?? '';
-		modelId = params?.get('model') ?? '';
-		engineId = params?.get('engine') ?? '';
-	}
+	const seriesId = $derived($page?.url?.searchParams?.get('series') ?? '');
+	const modelId = $derived($page?.url?.searchParams?.get('model') ?? '');
+	const engineId = $derived($page?.url?.searchParams?.get('engine') ?? '');
 
 	let docTypes: DocType[] = [];
 	let activeDocType: DocType | null = null;
