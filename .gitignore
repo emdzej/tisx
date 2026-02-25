@@ -3,3 +3,5 @@ dist
 .pnpm-debug.log
 .DS_Store
 data
+.turbo
+.svelte-kit
