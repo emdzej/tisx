@@ -32,10 +32,10 @@
 	let engineId = '';
 
 	$: {
-		const params = $page.url.searchParams;
-		seriesId = params.get('series') ?? '';
-		modelId = params.get('model') ?? '';
-		engineId = params.get('engine') ?? '';
+		const params = $page?.url?.searchParams;
+		seriesId = params?.get('series') ?? '';
+		modelId = params?.get('model') ?? '';
+		engineId = params?.get('engine') ?? '';
 	}
 
 	let docTypes: DocType[] = [];
