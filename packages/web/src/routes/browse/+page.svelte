@@ -27,30 +27,30 @@
 		publicationDate: number | null;
 	};
 
-	let seriesName = '';
-	let modelName = '';
-	let engineName = '';
+	let seriesName = $state('');
+	let modelName = $state('');
+	let engineName = $state('');
 
 	const seriesId = $derived($page?.url?.searchParams?.get('series') ?? '');
 	const modelId = $derived($page?.url?.searchParams?.get('model') ?? '');
 	const engineId = $derived($page?.url?.searchParams?.get('engine') ?? '');
 
-	let docTypes: DocType[] = [];
-	let activeDocType: DocType | null = null;
-	let loadingDocTypes = false;
-	let docTypeError = '';
+		let docTypes = $state<DocType[]>([]);
+	let activeDocType = $state<DocType | null>(null);
+	let loadingDocTypes = $state(false);
+	let docTypeError = $state('');
 
-	let rootGroups: GroupNode[] = [];
-	let groupChildren: Record<number, GroupNode[]> = {};
-	let expandedNodes = new Set<number>();
-	let groupLoading: Record<number, boolean> = {};
-	let groupsError = '';
-	let loadingGroups = false;
+	let rootGroups = $state<GroupNode[]>([]);
+	let groupChildren = $state<Record<number, GroupNode[]>>({});
+	let expandedNodes = $state(new Set<number>());
+	let groupLoading = $state<Record<number, boolean>>({});
+	let groupsError = $state('');
+	let loadingGroups = $state(false);
 
-	let selectedNodeId: number | null = null;
-	let documents: DocumentListItem[] = [];
-	let loadingDocuments = false;
-	let documentsError = '';
+	let selectedNodeId = $state<number | null>(null);
+	let documents = $state<DocumentListItem[]>([]);
+	let loadingDocuments = $state(false);
+	let documentsError = $state('');
 
 	const formatDate = (value: number | null) => {
 		if (!value) return '—';
