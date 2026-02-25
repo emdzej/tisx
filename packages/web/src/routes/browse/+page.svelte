@@ -30,6 +30,9 @@
 	let seriesId = '';
 	let modelId = '';
 	let engineId = '';
+	let seriesName = '';
+	let modelName = '';
+	let engineName = '';
 
 	$: {
 		const params = $page?.url?.searchParams;
@@ -169,7 +172,33 @@
 		goto(`/doc/${doc.id}`);
 	};
 
-	onMount(loadDocTypes);
+	const loadVehicleNames = async () => {
+		try {
+			if (seriesId) {
+				const series = await fetchJson<Array<{ id: number; name: string }>>('/api/series');
+				seriesName = series.find((s) => String(s.id) === seriesId)?.name ?? seriesId;
+			}
+			if (seriesId && modelId) {
+				const models = await fetchJson<Array<{ id: number; name: string }>>(
+					`/api/series/${seriesId}/models`
+				);
+				modelName = models.find((m) => String(m.id) === modelId)?.name ?? modelId;
+			}
+			if (modelId && engineId) {
+				const engines = await fetchJson<Array<{ id: number; name: string }>>(
+					`/api/models/${modelId}/engines`
+				);
+				engineName = engines.find((e) => String(e.id) === engineId)?.name ?? engineId;
+			}
+		} catch {
+			// ignore, fallback to IDs
+		}
+	};
+
+	onMount(() => {
+		loadDocTypes();
+		loadVehicleNames();
+	});
 </script>
 
 <section class="space-y-6">
@@ -179,8 +208,7 @@
 			<h1 class="text-3xl font-semibold">Document browser</h1>
 			<p class="text-sm text-slate-300">
 				{#if seriesId || modelId || engineId}
-					Viewing documents for series {seriesId || '—'}, model {modelId || '—'}, engine
-					{engineId || '—'}.
+					Viewing documents for {seriesName || seriesId || '—'} / {modelName || modelId || '—'} / {engineName || engineId || '—'}
 				{:else}
 					Select a vehicle on the home page to refine results.
 				{/if}
