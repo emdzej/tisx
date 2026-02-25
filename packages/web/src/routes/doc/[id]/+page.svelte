@@ -41,9 +41,8 @@
 	let textError = $state(false);
 	let textLoading = $state(false);
 	let textContent = $state('');
+	let renderedHtml = $state('');
 	let initialized = $state(false);
-
-	const renderedHtml = $derived(textContent ? marked.parse(textContent) : '');
 
 	const normalizeAssetPath = (path: string, base: string) => {
 		const cleaned = path
@@ -69,11 +68,15 @@
 		textError = false;
 		textLoading = true;
 		textContent = '';
+		renderedHtml = '';
 		try {
 			const response = await fetch(url);
 			if (!response.ok) throw new Error('Text not found');
 			const payload = (await response.json()) as { content?: string };
 			textContent = payload.content ?? '';
+			if (textContent) {
+				renderedHtml = await marked.parse(textContent);
+			}
 		} catch {
 			textError = true;
 		} finally {
