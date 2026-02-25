@@ -45,6 +45,41 @@ See `docs/` for detailed format documentation:
 - `itw-v1-wavelet.md` - File structure and wavelet format
 - `itw-v1-decompiled.md` - Reverse engineering notes
 
+## Docker deployment
+
+### Docker Compose (recommended)
+
+```bash
+mkdir -p data
+# Place your databases in ./data
+# - ./data/tis.sqlite
+# - ./data/docs.sqlite
+
+docker compose up --build
+```
+
+The server will be available on `http://localhost:3000`.
+
+### Docker CLI
+
+```bash
+docker build -t tisx .
+
+docker run --rm -p 3000:3000 \
+  -e PORT=3000 \
+  -e TIS_DB_PATH=/data/tis.sqlite \
+  -e DOCS_DB_PATH=/data/docs.sqlite \
+  -v $(pwd)/data/tis.sqlite:/data/tis.sqlite \
+  -v $(pwd)/data/docs.sqlite:/data/docs.sqlite \
+  tisx
+```
+
+### Environment variables
+
+- `PORT` (default: 3000)
+- `TIS_DB_PATH` (default: `/data/tis.sqlite`)
+- `DOCS_DB_PATH` (default: `/data/docs.sqlite`)
+
 ## License
 
 MIT

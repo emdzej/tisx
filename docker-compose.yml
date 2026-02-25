@@ -1,0 +1,12 @@
+services:
+  tisx:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      TIS_DB_PATH: /data/tis.sqlite
+      DOCS_DB_PATH: /data/docs.sqlite
+    volumes:
+      - ./data/tis.sqlite:/data/tis.sqlite
+      - ./data/docs.sqlite:/data/docs.sqlite

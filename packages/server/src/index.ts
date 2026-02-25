@@ -18,10 +18,8 @@ import type {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-const dbPath =
-  process.env.TIS_DB_PATH ?? join(os.homedir(), 'Documents', 'tis.sqlite');
-const docsDbPath =
-  process.env.DOCS_DB_PATH ?? join(os.homedir(), 'Documents', 'docs.sqlite');
+const dbPath = process.env.TIS_DB_PATH ?? '/data/tis.sqlite';
+const docsDbPath = process.env.DOCS_DB_PATH ?? '/data/docs.sqlite';
 
 const db = new Database(dbPath);
 const docsDb = new Database(docsDbPath, { readonly: true });
@@ -32,6 +30,8 @@ app.use(express.json());
 
 const assetsPath = join(__dirname, '..', 'assets');
 app.use('/assets', express.static(assetsPath));
+
+const webBuildPath = join(__dirname, '..', '..', 'web', 'build');
 
 app.get('/health', (_req, res) => {
   res.json({ status: 'ok' });
@@ -310,6 +310,16 @@ app.get('/api/document/:id', (req, res) => {
   };
 
   res.json(response);
+});
+
+app.use(express.static(webBuildPath));
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api') || req.path.startsWith('/assets')) {
+    next();
+    return;
+  }
+
+  res.sendFile(join(webBuildPath, 'index.html'));
 });
 
 const port = Number(process.env.PORT) || 3000;
