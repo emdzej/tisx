@@ -19,7 +19,7 @@ COPY packages/server/package.json ./packages/server/
 RUN pnpm install --frozen-lockfile
 
 # Copy source code
-COPY tsconfig.json turbo.json ./
+COPY turbo.json ./
 COPY packages/web ./packages/web
 COPY packages/server ./packages/server
 
