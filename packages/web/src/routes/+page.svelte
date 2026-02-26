@@ -129,7 +129,7 @@
 						disabled={loadingSeries}
 					>
 						<option value="">{loadingSeries ? 'Loading series…' : 'Choose series'}</option>
-						{#each seriesOptions as option (option.id)}
+						{#each seriesOptions as option, i (option.id + "-" + i)}
 							<option value={option.id}>{option.name}</option>
 						{/each}
 					</select>
@@ -158,7 +158,7 @@
 									: 'Choose model'
 								: 'Select series first'}
 						</option>
-						{#each modelOptions as option (option.id)}
+						{#each modelOptions as option, i (option.id + "-" + i)}
 							<option value={option.id}>{option.name}</option>
 						{/each}
 					</select>
@@ -187,7 +187,7 @@
 									: 'Choose engine'
 								: 'Select model first'}
 						</option>
-						{#each engineOptions as option (option.id)}
+						{#each engineOptions as option, i (option.id + "-" + i)}
 							<option value={option.id}>{option.name}</option>
 						{/each}
 					</select>
