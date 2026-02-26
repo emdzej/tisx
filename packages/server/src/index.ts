@@ -87,7 +87,9 @@ const main = async () => {
   const assetsPath = join(__dirname, '..', 'assets');
   app.use('/assets', express.static(assetsPath));
 
-  const webBuildPath = join(__dirname, '..', '..', 'web', 'build');
+  // In production Docker: /app/dist -> /app/web/build
+  // In dev: packages/server/dist -> packages/web/build
+  const webBuildPath = process.env.WEB_BUILD_PATH || join(__dirname, '..', 'web', 'build');
 
   app.get('/health', (_req, res) => {
     res.json({ status: 'ok' });
