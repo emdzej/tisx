@@ -1,33 +1,64 @@
-FROM node:20-alpine AS base
-WORKDIR /app
-RUN corepack enable
+# syntax=docker/dockerfile:1
 
-FROM base AS deps
+# ============================================
+# Stage 1: Build
+# ============================================
+FROM node:22-alpine AS builder
+
+# Install pnpm
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
+
+WORKDIR /app
+
+# Copy package files first for better caching
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY packages/server/package.json packages/server/package.json
-COPY packages/web/package.json packages/web/package.json
+COPY packages/web/package.json ./packages/web/
+COPY packages/server/package.json ./packages/server/
+
+# Install dependencies
 RUN pnpm install --frozen-lockfile
 
-FROM deps AS build
-COPY . .
-RUN pnpm --filter @tisx/server build
-RUN pnpm --filter web build
-RUN pnpm prune --prod
+# Copy source code
+COPY tsconfig.json turbo.json ./
+COPY packages/web ./packages/web
+COPY packages/server ./packages/server
 
-FROM base AS runner
+# Build the application
+RUN pnpm build
+
+# ============================================
+# Stage 2: Production
+# ============================================
+FROM node:22-alpine AS production
+
+# Install pandoc for markdown conversion
+RUN apk add --no-cache pandoc
+
+WORKDIR /app
+
+# Copy built server
+COPY --from=builder /app/packages/server/dist ./dist
+COPY --from=builder /app/packages/server/package.json ./
+
+# Copy built web app
+COPY --from=builder /app/packages/web/build ./web/build
+
+# Install production dependencies only
+RUN corepack enable && corepack prepare pnpm@9.15.4 --activate && \
+    pnpm install --prod --frozen-lockfile || npm install --omit=dev
+
+# Create data directory mount point
+RUN mkdir -p /data
+
+# Environment
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV TIS_DB_PATH=/data/tis.sqlite
 ENV DOCS_DB_PATH=/data/docs.sqlite
-WORKDIR /app
-
-COPY --from=build /app/package.json /app/pnpm-workspace.yaml ./
-COPY --from=build /app/node_modules ./node_modules
-COPY --from=build /app/packages/server/package.json /app/packages/server/package.json
-COPY --from=build /app/packages/server/node_modules /app/packages/server/node_modules
-COPY --from=build /app/packages/server/dist /app/packages/server/dist
-COPY --from=build /app/packages/server/assets /app/packages/server/assets
-COPY --from=build /app/packages/web/build /app/packages/web/build
 
 EXPOSE 3000
-CMD ["node", "packages/server/dist/index.js"]
+
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD wget --no-verbose --tries=1 --spider http://localhost:3000/health || exit 1
+
+CMD ["node", "dist/index.js"]
