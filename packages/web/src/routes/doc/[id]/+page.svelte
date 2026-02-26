@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 	import { browser } from '$app/environment';
 	import type { PageProps } from './$types';
 
@@ -124,7 +125,7 @@
 			history.back();
 			return;
 		}
-		goto('/browse');
+		goto(resolve('/browse'));
 	}
 
 	function handleImageError() {
@@ -142,13 +143,19 @@
 <section class="space-y-6">
 	<header class="flex flex-wrap items-start justify-between gap-4">
 		<div class="space-y-2">
-			<p class="text-xs uppercase tracking-[0.4em] text-slate-400">Document detail</p>
-			<h1 class="text-3xl font-semibold text-white">{document?.title ?? `Doc: ${id}`}</h1>
-			<div class="flex flex-wrap gap-4 text-sm text-slate-300">
-				<span class="rounded-full border border-slate-800 bg-slate-950/60 px-3 py-1">
+			<p class="text-xs tracking-[0.4em] text-slate-500 uppercase dark:text-slate-400">
+				Document detail
+			</p>
+			<h1 class="text-3xl font-semibold">{document?.title ?? `Doc: ${id}`}</h1>
+			<div class="flex flex-wrap gap-4 text-sm text-slate-600 dark:text-slate-300">
+				<span
+					class="rounded-full border border-slate-300 bg-white px-3 py-1 dark:border-slate-800 dark:bg-slate-950/60"
+				>
 					Date: {formatPublicationDate(document?.publicationDate ?? null)}
 				</span>
-				<span class="rounded-full border border-slate-800 bg-slate-950/60 px-3 py-1">
+				<span
+					class="rounded-full border border-slate-300 bg-white px-3 py-1 dark:border-slate-800 dark:bg-slate-950/60"
+				>
 					Doc type: {document?.dokartId ?? '—'}
 				</span>
 			</div>
@@ -156,7 +163,7 @@
 
 		<button
 			type="button"
-			class="inline-flex items-center gap-2 rounded-full border border-slate-800 bg-slate-950/60 px-4 py-2 text-sm text-slate-200 transition hover:border-slate-600 hover:text-white"
+			class="inline-flex items-center gap-2 rounded-full border border-slate-300 bg-white px-4 py-2 text-sm text-slate-700 transition hover:border-slate-400 hover:text-slate-900 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-200 dark:hover:border-slate-600 dark:hover:text-white"
 			onclick={handleBack}
 		>
 			<span aria-hidden="true">←</span>
@@ -165,19 +172,25 @@
 	</header>
 
 	{#if loading}
-		<div class="rounded-2xl border border-slate-800 bg-slate-900/60 p-6 text-slate-300">
+		<div
+			class="rounded-2xl border border-slate-200 bg-white p-6 text-slate-600 dark:border-slate-800 dark:bg-slate-900/60 dark:text-slate-300"
+		>
 			Loading document details…
 		</div>
 	{:else if error}
-		<div class="rounded-2xl border border-rose-500/40 bg-rose-500/10 p-6 text-rose-200">
+		<div
+			class="rounded-2xl border border-rose-300 bg-rose-50 p-6 text-rose-700 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-200"
+		>
 			{error}
 		</div>
 	{:else}
 		<div class="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
 			<div class="space-y-3">
-				<h2 class="text-lg font-semibold text-white">Graphics</h2>
+				<h2 class="text-lg font-semibold">Graphics</h2>
 				{#if imageUrl}
-					<div class="group relative overflow-auto rounded-2xl border border-slate-800 bg-slate-950/70 p-4">
+					<div
+						class="group relative overflow-auto rounded-2xl border border-slate-200 bg-slate-50 p-4 dark:border-slate-800 dark:bg-slate-950/70"
+					>
 						<img
 							src={imageUrl}
 							alt={document?.title ?? 'Document graphic'}
@@ -187,28 +200,37 @@
 						<p class="mt-2 text-xs text-slate-500">Scroll to pan, hover to zoom.</p>
 					</div>
 				{:else}
-					<div class="flex min-h-[260px] items-center justify-center rounded-2xl border border-dashed border-slate-700 bg-slate-950/70 text-sm text-slate-400">
+					<div
+						class="flex min-h-[260px] items-center justify-center rounded-2xl border border-dashed border-slate-300 bg-slate-50 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-400"
+					>
 						No graphic available yet.
 					</div>
 				{/if}
 			</div>
 
 			<div class="space-y-3">
-				<h2 class="text-lg font-semibold text-white">Text content</h2>
+				<h2 class="text-lg font-semibold">Text content</h2>
 				{#if textUrl && !textError && !textLoading}
-					<article class="prose prose-invert prose-sm max-w-none rounded-2xl border border-slate-800 bg-slate-950/70 p-5">
+					<article
+						class="prose prose-sm max-w-none rounded-2xl border border-slate-200 bg-white p-5 prose-slate dark:border-slate-800 dark:bg-slate-950/70 dark:prose-invert"
+					>
 						{#if renderedHtml}
+							<!-- eslint-disable-next-line svelte/no-at-html-tags -- server-rendered HTML from Pandoc -->
 							{@html renderedHtml}
 						{:else}
-							<p class="text-slate-400">Text file was empty.</p>
+							<p class="text-slate-500 dark:text-slate-400">Text file was empty.</p>
 						{/if}
 					</article>
 				{:else if textUrl && !textError}
-					<div class="rounded-2xl border border-slate-800 bg-slate-950/70 p-5 text-sm text-slate-300">
+					<div
+						class="rounded-2xl border border-slate-200 bg-white p-5 text-sm text-slate-600 dark:border-slate-800 dark:bg-slate-950/70 dark:text-slate-300"
+					>
 						Loading text content…
 					</div>
 				{:else}
-					<div class="rounded-2xl border border-dashed border-slate-700 bg-slate-950/70 p-5 text-sm text-slate-400">
+					<div
+						class="rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-5 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-950/70 dark:text-slate-400"
+					>
 						No text content available yet.
 					</div>
 				{/if}

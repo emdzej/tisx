@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { page } from '$app/stores';
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import { SvelteSet } from 'svelte/reactivity';
 	import GroupTree from './GroupTree.svelte';
 	import { browser } from '$app/environment';
 
@@ -35,14 +37,14 @@
 	const modelId = $derived($page?.url?.searchParams?.get('model') ?? '');
 	const engineId = $derived($page?.url?.searchParams?.get('engine') ?? '');
 
-		let docTypes = $state<DocType[]>([]);
+	let docTypes = $state<DocType[]>([]);
 	let activeDocType = $state<DocType | null>(null);
 	let loadingDocTypes = $state(false);
 	let docTypeError = $state('');
 
 	let rootGroups = $state<GroupNode[]>([]);
 	let groupChildren = $state<Record<number, GroupNode[]>>({});
-	let expandedNodes = $state(new Set<number>());
+	let expandedNodes = new SvelteSet<number>();
 	let groupLoading = $state<Record<number, boolean>>({});
 	let groupsError = $state('');
 	let loadingGroups = $state(false);
@@ -82,9 +84,9 @@
 			if (activeDocType) {
 				await loadRootGroups(activeDocType.id);
 			}
-		} catch (error) {
-			console.error('loadDocTypes error:', error);
-			docTypeError = (error as Error).message;
+		} catch {
+			console.error('loadDocTypes error');
+			docTypeError = 'Failed to load document types';
 		} finally {
 			loadingDocTypes = false;
 		}
@@ -93,7 +95,7 @@
 	const resetGroupsState = () => {
 		rootGroups = [];
 		groupChildren = {};
-		expandedNodes = new Set();
+		expandedNodes = new SvelteSet();
 		groupLoading = {};
 		groupsError = '';
 		selectedNodeId = null;
@@ -106,8 +108,8 @@
 		groupsError = '';
 		try {
 			rootGroups = await fetchJson<GroupNode[]>(`/api/groups/${dokartId}`);
-		} catch (error) {
-			groupsError = (error as Error).message;
+		} catch {
+			groupsError = 'Failed to load groups';
 			rootGroups = [];
 		} finally {
 			loadingGroups = false;
@@ -119,7 +121,7 @@
 		try {
 			const nodes = await fetchJson<GroupNode[]>(`/api/groups/${dokartId}/${nodeId}`);
 			groupChildren = { ...groupChildren, [nodeId]: nodes };
-		} catch (error) {
+		} catch {
 			groupChildren = { ...groupChildren, [nodeId]: [] };
 		} finally {
 			groupLoading = { ...groupLoading, [nodeId]: false };
@@ -128,7 +130,7 @@
 
 	const toggleNode = async (node: GroupNode) => {
 		if (!activeDocType) return;
-		const next = new Set(expandedNodes);
+		const next = new SvelteSet(expandedNodes);
 		if (expandedNodes.has(node.id)) {
 			next.delete(node.id);
 			expandedNodes = next;
@@ -151,8 +153,8 @@
 		documentsError = '';
 		try {
 			documents = await fetchJson<DocumentListItem[]>(`/api/documents/${nodeId}`);
-		} catch (error) {
-			documentsError = (error as Error).message;
+		} catch {
+			documentsError = 'Failed to load documents';
 			documents = [];
 		} finally {
 			loadingDocuments = false;
@@ -167,7 +169,7 @@
 	};
 
 	const openDocument = (doc: DocumentListItem) => {
-		goto(`/doc/${doc.id}`);
+		goto(resolve(`/doc/${doc.id}` as `/${string}`));
 	};
 
 	const loadVehicleNames = async () => {
@@ -208,11 +210,15 @@
 <section class="space-y-6">
 	<header class="space-y-4">
 		<div>
-			<p class="text-xs uppercase tracking-[0.4em] text-slate-400">Browse documents</p>
+			<p class="text-xs tracking-[0.4em] text-slate-500 uppercase dark:text-slate-400">
+				Browse documents
+			</p>
 			<h1 class="text-3xl font-semibold">Document browser</h1>
-			<p class="text-sm text-slate-300">
+			<p class="text-sm text-slate-600 dark:text-slate-300">
 				{#if seriesId || modelId || engineId}
-					Viewing documents for {seriesName || seriesId || '—'} / {modelName || modelId || '—'} / {engineName || engineId || '—'}
+					Viewing documents for {seriesName || seriesId || '—'} / {modelName || modelId || '—'} / {engineName ||
+						engineId ||
+						'—'}
 				{:else}
 					Select a vehicle on the home page to refine results.
 				{/if}
@@ -221,11 +227,15 @@
 
 		<div class="flex flex-wrap gap-2">
 			{#if loadingDocTypes}
-				<span class="rounded-full border border-slate-800 bg-slate-950/60 px-4 py-2 text-xs text-slate-400">
+				<span
+					class="rounded-full border border-slate-300 bg-white px-4 py-2 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400"
+				>
 					Loading document types…
 				</span>
 			{:else if docTypeError}
-				<span class="rounded-full border border-rose-500/40 bg-rose-500/10 px-4 py-2 text-xs text-rose-300">
+				<span
+					class="rounded-full border border-rose-300 bg-rose-50 px-4 py-2 text-xs text-rose-600 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-300"
+				>
 					{docTypeError}
 				</span>
 			{:else}
@@ -234,12 +244,14 @@
 						type="button"
 						class={`rounded-full border px-4 py-2 text-sm font-medium transition ${
 							activeDocType?.id === docType.id
-								? 'border-sky-400 bg-sky-500/20 text-sky-100'
-								: 'border-slate-800 bg-slate-950/60 text-slate-300 hover:border-slate-600'
+								? 'border-sky-400 bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-100'
+								: 'border-slate-300 bg-white text-slate-600 hover:border-slate-400 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-300 dark:hover:border-slate-600'
 						}`}
 						on:click={() => selectDocType(docType)}
 					>
-						<span class="mr-2 text-xs uppercase tracking-[0.3em] text-slate-400">{docType.code}</span>
+						<span class="mr-2 text-xs tracking-[0.3em] text-slate-500 uppercase dark:text-slate-400"
+							>{docType.code}</span
+						>
 						{docType.name}
 					</button>
 				{/each}
@@ -248,28 +260,31 @@
 	</header>
 
 	<div class="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
-		<aside class="rounded-3xl border border-slate-800 bg-slate-950/60 p-4 shadow-xl">
+		<aside
+			class="rounded-3xl border border-slate-200 bg-white p-4 shadow-xl dark:border-slate-800 dark:bg-slate-950/60"
+		>
 			<div class="flex items-center justify-between">
-				<h2 class="text-sm font-semibold text-slate-200">Groups</h2>
+				<h2 class="text-sm font-semibold text-slate-700 dark:text-slate-200">Groups</h2>
 				{#if activeDocType}
-					<span class="text-xs text-slate-500">{activeDocType.mainGroupLabel ?? 'Main groups'}</span>
+					<span class="text-xs text-slate-500">{activeDocType.mainGroupLabel ?? 'Main groups'}</span
+					>
 				{/if}
 			</div>
 
 			{#if loadingGroups}
-				<p class="mt-4 text-sm text-slate-400">Loading groups…</p>
+				<p class="mt-4 text-sm text-slate-500 dark:text-slate-400">Loading groups…</p>
 			{:else if groupsError}
-				<p class="mt-4 text-sm text-rose-300">{groupsError}</p>
+				<p class="mt-4 text-sm text-rose-600 dark:text-rose-300">{groupsError}</p>
 			{:else if rootGroups.length === 0}
 				<p class="mt-4 text-sm text-slate-500">No groups available.</p>
 			{:else}
 				<div class="mt-4 max-h-[60vh] overflow-auto pr-2">
 					<GroupTree
 						nodes={rootGroups}
-						expandedNodes={expandedNodes}
+						{expandedNodes}
 						loadingMap={groupLoading}
 						childrenMap={groupChildren}
-						selectedNodeId={selectedNodeId}
+						{selectedNodeId}
 						onToggle={toggleNode}
 						onSelect={selectNode}
 					/>
@@ -286,15 +301,21 @@
 			</div>
 
 			{#if loadingDocuments}
-				<p class="rounded-2xl border border-slate-800 bg-slate-950/60 p-6 text-sm text-slate-400">
+				<p
+					class="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400"
+				>
 					Loading documents…
 				</p>
 			{:else if documentsError}
-				<p class="rounded-2xl border border-rose-500/40 bg-rose-500/10 p-6 text-sm text-rose-300">
+				<p
+					class="rounded-2xl border border-rose-300 bg-rose-50 p-6 text-sm text-rose-600 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-300"
+				>
 					{documentsError}
 				</p>
 			{:else if documents.length === 0}
-				<p class="rounded-2xl border border-slate-800 bg-slate-950/60 p-6 text-sm text-slate-400">
+				<p
+					class="rounded-2xl border border-slate-200 bg-white p-6 text-sm text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400"
+				>
 					Select a group to see documents.
 				</p>
 			{:else}
@@ -303,15 +324,21 @@
 						<li>
 							<button
 								type="button"
-								class="w-full rounded-2xl border border-slate-800 bg-slate-950/60 p-4 text-left transition hover:border-sky-500/60 hover:bg-slate-900"
+								class="w-full rounded-2xl border border-slate-200 bg-white p-4 text-left transition hover:border-sky-400 hover:bg-sky-50 dark:border-slate-800 dark:bg-slate-950/60 dark:hover:border-sky-500/60 dark:hover:bg-slate-900"
 								on:click={() => openDocument(doc)}
 							>
 								<div class="flex flex-wrap items-center justify-between gap-2">
 									<div>
-										<p class="text-sm font-semibold text-slate-100">{doc.title}</p>
-										<p class="text-xs text-slate-400">Doc ID: {doc.id} · Type {doc.dokartId}</p>
+										<p class="text-sm font-semibold text-slate-900 dark:text-slate-100">
+											{doc.title}
+										</p>
+										<p class="text-xs text-slate-500 dark:text-slate-400">
+											Doc ID: {doc.id} · Type {doc.dokartId}
+										</p>
 									</div>
-									<span class="text-xs text-slate-400">{formatDate(doc.publicationDate)}</span>
+									<span class="text-xs text-slate-500 dark:text-slate-400"
+										>{formatDate(doc.publicationDate)}</span
+									>
 								</div>
 							</button>
 						</li>

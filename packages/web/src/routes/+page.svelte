@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
 
 	type Option = { id: string | number; name: string };
 
@@ -95,7 +96,7 @@
 			model: selectedModel,
 			engine: selectedEngine
 		});
-		goto(`/browse?${params.toString()}`);
+		goto(resolve(`/browse?${params.toString()}` as `/${string}`));
 	};
 
 	onMount(loadSeries);
@@ -103,41 +104,50 @@
 
 <section class="space-y-10">
 	<div class="space-y-3">
-		<p class="text-sm uppercase tracking-[0.3em] text-slate-400">Find your fitment</p>
+		<p class="text-sm tracking-[0.3em] text-slate-500 uppercase dark:text-slate-400">
+			Find your fitment
+		</p>
 		<h1 class="text-4xl font-semibold">Select a vehicle</h1>
-		<p class="max-w-2xl text-slate-300">
+		<p class="max-w-2xl text-slate-600 dark:text-slate-300">
 			Pick a series, model, and engine to browse the correct TIS resources.
 		</p>
 	</div>
 
 	<div
-		class="rounded-3xl border border-slate-800 bg-gradient-to-br from-slate-950/80 via-slate-900/70 to-slate-950/60 p-6 shadow-xl"
+		class="rounded-3xl border border-slate-200 bg-gradient-to-br from-white via-slate-50 to-slate-100 p-6 shadow-xl dark:border-slate-800 dark:from-slate-950/80 dark:via-slate-900/70 dark:to-slate-950/60"
 	>
 		<div class="grid gap-6 md:grid-cols-3">
 			<div class="space-y-2">
-				<label class="text-sm font-medium text-slate-200" for="series">Series</label>
+				<label class="text-sm font-medium text-slate-700 dark:text-slate-200" for="series"
+					>Series</label
+				>
 				<div class="relative">
 					<select
 						id="series"
-						class="w-full appearance-none rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-slate-100 focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+						class="w-full appearance-none rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/30 focus:outline-none dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-100"
 						on:change={handleSeriesChange}
 						disabled={loadingSeries}
 					>
 						<option value="">{loadingSeries ? 'Loading series…' : 'Choose series'}</option>
-						{#each seriesOptions as option}
+						{#each seriesOptions as option (option.id)}
 							<option value={option.id}>{option.name}</option>
 						{/each}
 					</select>
-					<span class="pointer-events-none absolute inset-y-0 right-4 flex items-center text-slate-400">▾</span>
+					<span
+						class="pointer-events-none absolute inset-y-0 right-4 flex items-center text-slate-400"
+						>▾</span
+					>
 				</div>
 			</div>
 
 			<div class="space-y-2">
-				<label class="text-sm font-medium text-slate-200" for="model">Model</label>
+				<label class="text-sm font-medium text-slate-700 dark:text-slate-200" for="model"
+					>Model</label
+				>
 				<div class="relative">
 					<select
 						id="model"
-						class="w-full appearance-none rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-slate-100 focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+						class="w-full appearance-none rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/30 focus:outline-none dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-100"
 						on:change={handleModelChange}
 						disabled={!selectedSeries || loadingModels}
 					>
@@ -148,20 +158,25 @@
 									: 'Choose model'
 								: 'Select series first'}
 						</option>
-						{#each modelOptions as option}
+						{#each modelOptions as option (option.id)}
 							<option value={option.id}>{option.name}</option>
 						{/each}
 					</select>
-					<span class="pointer-events-none absolute inset-y-0 right-4 flex items-center text-slate-400">▾</span>
+					<span
+						class="pointer-events-none absolute inset-y-0 right-4 flex items-center text-slate-400"
+						>▾</span
+					>
 				</div>
 			</div>
 
 			<div class="space-y-2">
-				<label class="text-sm font-medium text-slate-200" for="engine">Engine</label>
+				<label class="text-sm font-medium text-slate-700 dark:text-slate-200" for="engine"
+					>Engine</label
+				>
 				<div class="relative">
 					<select
 						id="engine"
-						class="w-full appearance-none rounded-xl border border-slate-800 bg-slate-950/60 px-4 py-3 text-slate-100 focus:border-sky-500 focus:outline-none focus:ring-2 focus:ring-sky-500/30"
+						class="w-full appearance-none rounded-xl border border-slate-300 bg-white px-4 py-3 text-slate-900 focus:border-sky-500 focus:ring-2 focus:ring-sky-500/30 focus:outline-none dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-100"
 						on:change={handleEngineChange}
 						disabled={!selectedModel || loadingEngines}
 					>
@@ -172,25 +187,30 @@
 									: 'Choose engine'
 								: 'Select model first'}
 						</option>
-						{#each engineOptions as option}
+						{#each engineOptions as option (option.id)}
 							<option value={option.id}>{option.name}</option>
 						{/each}
 					</select>
-					<span class="pointer-events-none absolute inset-y-0 right-4 flex items-center text-slate-400">▾</span>
+					<span
+						class="pointer-events-none absolute inset-y-0 right-4 flex items-center text-slate-400"
+						>▾</span
+					>
 				</div>
 			</div>
 		</div>
 
-		<div class="mt-6 flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between">
-			<div class="text-sm text-slate-400">
+		<div
+			class="mt-6 flex flex-col items-start gap-3 sm:flex-row sm:items-center sm:justify-between"
+		>
+			<div class="text-sm text-slate-500 dark:text-slate-400">
 				{#if errorMessage}
-					<span class="text-rose-400">{errorMessage}</span>
+					<span class="text-rose-500 dark:text-rose-400">{errorMessage}</span>
 				{:else}
 					<span>Complete all fields to unlock browsing.</span>
 				{/if}
 			</div>
 			<button
-				class="inline-flex items-center justify-center rounded-full bg-sky-500 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-500/30 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-slate-700 disabled:text-slate-400 disabled:shadow-none"
+				class="inline-flex items-center justify-center rounded-full bg-sky-500 px-6 py-3 text-sm font-semibold text-white shadow-lg shadow-sky-500/30 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:text-slate-500 disabled:shadow-none dark:disabled:bg-slate-700 dark:disabled:text-slate-400"
 				disabled={!selectedSeries || !selectedModel || !selectedEngine}
 				on:click={handleBrowse}
 			>
