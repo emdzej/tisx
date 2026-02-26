@@ -94,7 +94,7 @@ const main = async () => {
   });
 
   app.get('/api/docs/*', (req, res) => {
-    const docId = req.params[0];
+    const docId = (req.params as Record<string, string>)[0];
     const format = req.query.format as string | undefined;
     
     if (!docId) {
