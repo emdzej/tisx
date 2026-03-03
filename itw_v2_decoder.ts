@@ -1,11 +1,13 @@
 /**
- * ITW V2 Decoder - CORRECT VERSION
+ * ITW V2 Decoder - WORKING VERSION
  * 
  * Format:
- * - Combined buffer: [palette_size, palette[0..n], symbols...]
- * - RLE uses palette as literal table
- * - Symbols 0-(palSize+7) are RLE pairs: (2^val copies, lookup[next-8])
- * - Symbols (palSize+8)+ are single values
+ * - Stream1: symbols 8-23 encode run lengths as 2^(sym-8)
+ * - Stream2: symbols 1-7 encode palette indices
+ * 
+ * Combine logic:
+ * - If sym < 16: "paired mode" - take color from stream2, run from stream1
+ * - If sym >= 16: "single mode" - color = sym-16, run = 2^(sym-8)
  */
 
 import * as fs from 'fs';
@@ -101,74 +103,39 @@ function parseV2(buf: Buffer) {
     width: buf.readUInt16BE(6),
     height: buf.readUInt16BE(8),
     palette,
-    palSize,
     stream1,
     stream2
   };
 }
 
-function decodeV2(
-  stream1Symbols: number[],
-  stream2Symbols: number[],
-  palette: number[],
-  palSize: number,
-  targetSize: number
-): Buffer {
-  // Build combined buffer like original: [palSize, palette..., symbols...]
-  const combined: number[] = [palSize, ...palette];
-  
-  // Combine streams
+function decodeV2(stream1Symbols: number[], stream2Symbols: number[], palette: number[], targetSize: number): Buffer {
+  const pixels: number[] = [];
   let s2i = 0;
-  const threshold = palSize + 8;
   
   for (const sym of stream1Symbols) {
-    if (sym < threshold) {
-      // Paired mode: output stream2 value, then stream1 value
-      if (s2i < stream2Symbols.length) {
-        combined.push(stream2Symbols[s2i++]);
-      }
-      combined.push(sym);
-    } else {
-      // Single mode: just stream1 value
-      combined.push(sym);
-    }
-  }
-  
-  // RLE decode (FUN_004b5d20)
-  const literalCount = combined[0];  // palette size
-  const literals = combined.slice(1, 1 + literalCount);  // palette colors
-  const OFFSET = 8;
-  const rleThreshold = literalCount + OFFSET;
-  
-  const output: number[] = [];
-  let i = 1 + literalCount;  // Start after palette
-  
-  while (i < combined.length && output.length < targetSize) {
-    const val = combined[i];
+    // Run length = 2^(sym - 8)
+    // sym=8 → run=1, sym=15 → run=128, sym=23 → run=32768
+    const run = Math.pow(2, sym - 8);
     
-    if (val < rleThreshold) {
-      // RLE pair: (power, index)
-      if (i + 1 >= combined.length) break;
-      const next = combined[i + 1];
-      i += 2;
-      
-      const repeatCount = Math.pow(2, val);
-      const valueIndex = next - OFFSET;
-      const value = valueIndex >= 0 && valueIndex < literals.length ? literals[valueIndex] : 0;
-      
-      for (let j = 0; j < repeatCount && output.length < targetSize; j++) {
-        output.push(value);
-      }
+    let colorIndex: number;
+    if (sym < 16) {
+      // Paired mode: color from stream2 (values 1-7)
+      colorIndex = s2i < stream2Symbols.length ? stream2Symbols[s2i++] : 7;
     } else {
-      // Single value
-      const valueIndex = (val - literalCount) - OFFSET;
-      const value = valueIndex >= 0 && valueIndex < literals.length ? literals[valueIndex] : 0;
-      output.push(value);
-      i++;
+      // Single mode: color from symbol itself (16→0, 23→7)
+      colorIndex = sym - 16;
     }
+    
+    const pixelValue = palette[colorIndex] ?? 0;
+    
+    for (let i = 0; i < run && pixels.length < targetSize; i++) {
+      pixels.push(pixelValue);
+    }
+    
+    if (pixels.length >= targetSize) break;
   }
   
-  return Buffer.from(output);
+  return Buffer.from(pixels);
 }
 
 async function main() {
@@ -188,20 +155,20 @@ async function main() {
   
   const data = parseV2(buf);
   console.log(`ITW V2: ${data.width}×${data.height}`);
-  console.log(`Palette (${data.palSize}): [${data.palette.join(', ')}]`);
+  console.log(`Palette: [${data.palette.join(', ')}]`);
   
   // Decode Huffman streams
   const tree1 = buildHuffmanTree(data.stream1);
   const s1Symbols = huffmanDecode(tree1, data.stream1, tree1.dataStart);
-  console.log(`Stream1: ${s1Symbols.length} symbols`);
+  console.log(`Stream1: ${s1Symbols.length} symbols (range ${Math.min(...s1Symbols)}-${Math.max(...s1Symbols)})`);
   
   const tree2 = buildHuffmanTree(data.stream2);
   const s2Symbols = huffmanDecode(tree2, data.stream2, tree2.dataStart);
-  console.log(`Stream2: ${s2Symbols.length} symbols`);
+  console.log(`Stream2: ${s2Symbols.length} symbols (range ${Math.min(...s2Symbols)}-${Math.max(...s2Symbols)})`);
   
   // Decode pixels
   const targetSize = data.width * data.height;
-  const pixels = decodeV2(s1Symbols, s2Symbols, data.palette, data.palSize, targetSize);
+  const pixels = decodeV2(s1Symbols, s2Symbols, data.palette, targetSize);
   console.log(`Decoded: ${pixels.length} pixels`);
   
   // Save PNG

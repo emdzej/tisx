@@ -1,5 +1,8 @@
 /**
- * ITW V2 Decoder - Fixed negative index handling
+ * ITW V2 Decoder - Alternative RLE interpretation
+ * 
+ * Hypothesis: literalCount=23 means "use symbols 1-23 as the literal table"
+ * NOT "copy 23 values from combined as literals"
  */
 
 import * as fs from 'fs';
@@ -65,73 +68,12 @@ function combine(d1: number[], d2: number[], palSize: number): number[] {
   return out;
 }
 
-// FUN_004b5d20 - RLE expansion with FIXED negative index handling
-function rleExpand(combined: number[], targetSize: number): number[] {
-  if (combined.length < 1) return [];
-  
-  const literalCount = combined[0];
-  const literals: number[] = [];
-  let i = 1;
-  for (let j = 0; j < literalCount && i < combined.length; j++, i++) {
-    literals.push(combined[i]);
-  }
-  
-  console.log(`  RLE: ${literalCount} literals`);
-  console.log(`  Literals[0-9]: [${literals.slice(0, 10).join(', ')}]`);
-  
-  const output: number[] = [];
-  const OFFSET = 8;
-  const threshold = literalCount + OFFSET;
-  
-  let rlePairs = 0, singles = 0, negativeIdx = 0;
-  
-  while (i < combined.length && output.length < targetSize) {
-    const val = combined[i];
-    
-    if (val < threshold) {
-      // RLE pair
-      if (i + 1 >= combined.length) break;
-      const next = combined[i + 1];
-      i += 2;
-      
-      const repeatCount = Math.pow(2, val);
-      const valueIndex = next - OFFSET;
-      
-      // FIX: Handle negative index by using raw symbol instead
-      let value: number;
-      if (valueIndex < 0) {
-        // "next" is a stream2 symbol (1-7), use as direct palette index
-        value = next;  // Direct symbol, not lookup
-        negativeIdx++;
-      } else if (valueIndex < literals.length) {
-        value = literals[valueIndex];
-      } else {
-        value = 0;
-      }
-      
-      for (let j = 0; j < repeatCount && output.length < targetSize; j++) {
-        output.push(value);
-      }
-      rlePairs++;
-    } else {
-      // Single value
-      const valueIndex = (val - literalCount) - OFFSET;
-      const value = valueIndex >= 0 && valueIndex < literals.length ? literals[valueIndex] : val;
-      output.push(value);
-      i++;
-      singles++;
-    }
-  }
-  
-  console.log(`  RLE pairs: ${rlePairs}, singles: ${singles}, negative idx: ${negativeIdx}`);
-  
-  return output;
-}
-
-function mapToPalette(symbols: number[], palette: number[]): Buffer {
-  const out = Buffer.alloc(symbols.length);
-  for (let i = 0; i < symbols.length; i++) {
-    const sym = symbols[i];
+// Alternative interpretation: skip combined[0], treat rest as direct symbols
+// No RLE at all - just map symbols to palette indices
+function directDecode(combined: number[], palette: number[]): Buffer {
+  const out = Buffer.alloc(combined.length);
+  for (let i = 0; i < combined.length; i++) {
+    const sym = combined[i];
     let palIdx: number;
     if (sym < 8) palIdx = sym;
     else if (sym < 16) palIdx = sym - 8;
@@ -158,34 +100,44 @@ async function main() {
   const d = parseV2(buf);
   const targetSize = d.w * d.h;
   
-  console.log('=== ITW V2 Fixed ===');
+  console.log('=== ITW V2 Direct (No RLE) ===');
   console.log(`Image: ${d.w}×${d.h} (${targetSize} pixels)`);
   console.log(`Palette: [${d.pal.join(', ')}]`);
   
   const { state: s1, dataStart: ds1 } = buildTree(d.s1);
   const dec1 = huffDecode(s1, d.s1, ds1);
-  console.log(`Stream1: ${dec1.length} symbols (range ${Math.min(...dec1)}-${Math.max(...dec1)})`);
+  console.log(`Stream1: ${dec1.length} symbols`);
   
   const { state: s2, dataStart: ds2 } = buildTree(d.s2);
   const dec2 = huffDecode(s2, d.s2, ds2);
-  console.log(`Stream2: ${dec2.length} symbols (range ${Math.min(...dec2)}-${Math.max(...dec2)})`);
+  console.log(`Stream2: ${dec2.length} symbols`);
   
   const combined = combine(dec1, dec2, d.palSize);
   console.log(`Combined: ${combined.length} symbols`);
+  console.log(`Target: ${targetSize} pixels`);
+  console.log(`Ratio needed: ${(targetSize / combined.length).toFixed(2)}x`);
   
-  const expanded = rleExpand(combined, targetSize);
-  console.log(`Expanded: ${expanded.length}/${targetSize}`);
+  // Try 1: Direct decode (no RLE)
+  const pixels1 = directDecode(combined, d.pal);
+  await sharp(pixels1, { raw: { width: d.w, height: Math.floor(combined.length / d.w), channels: 1 } })
+    .png().toFile(`${process.env.HOME}/.openclaw/workspace/itw_v2_direct.png`);
+  console.log('\nSaved direct decode (no RLE):', Math.floor(combined.length / d.w), 'rows');
   
-  // Check distribution
-  const dist: Record<number, number> = {};
-  for (const v of expanded) dist[v] = (dist[v] || 0) + 1;
-  console.log('Value distribution:', Object.entries(dist).sort((a,b) => b[1]-a[1]).slice(0, 5).map(([k,v]) => `${k}:${v}`).join(', '));
-  
-  const pixels = mapToPalette(expanded, d.pal);
-  
-  const outPath = process.argv[3] || `${process.env.HOME}/.openclaw/workspace/itw_v2_fixed.png`;
-  await sharp(pixels, { raw: { width: d.w, height: d.h, channels: 1 } }).png().toFile(outPath);
-  console.log('Saved:', outPath);
+  // Try 2: Treat as simple RLE: (count, value) pairs
+  const pixels2: number[] = [];
+  for (let i = 0; i < combined.length - 1 && pixels2.length < targetSize; i += 2) {
+    const count = combined[i];
+    const sym = combined[i + 1];
+    let palIdx = sym < 8 ? sym : (sym < 16 ? sym - 8 : sym - 16);
+    const value = palIdx < d.pal.length ? d.pal[palIdx] : 0;
+    for (let j = 0; j < count && pixels2.length < targetSize; j++) {
+      pixels2.push(value);
+    }
+  }
+  const buf2 = Buffer.from(pixels2);
+  await sharp(buf2, { raw: { width: d.w, height: Math.floor(pixels2.length / d.w), channels: 1 } })
+    .png().toFile(`${process.env.HOME}/.openclaw/workspace/itw_v2_rle_simple.png`);
+  console.log('Saved simple RLE:', pixels2.length, 'pixels,', Math.floor(pixels2.length / d.w), 'rows');
 }
 
 main().catch(e => console.error(e));

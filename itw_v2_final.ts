@@ -1,303 +1,180 @@
 /**
- * ITW V2 Decoder - Correct implementation from tis.exe
- * 
- * Dictionary format (in stream):
- * - uint32 LE: entry count
- * - entries[]: 8 bytes each: [3 unused][symbol:1][frequency:4 LE]
- * - uint32 LE: max output symbols
- * - rest: Huffman-coded bit stream
+ * ITW V2 Decoder - Final version with correct bit traversal limit
  */
 
 import * as fs from 'fs';
 import sharp from 'sharp';
 
-// ============= Huffman structures =============
-
-interface HuffmanEntry {
+interface Node {
+  isLeaf: number;
   symbol: number;
-  frequency: number;
+  index: number;
+  left: number;
+  right: number;
+  freq: number;
 }
 
-interface HuffmanNode {
-  leafFlag: number;   // non-zero = leaf
-  symbol: number;     // valid if leafFlag != 0
-  leftChild: number;  // node index
-  rightChild: number; // node index
+interface DecoderState {
+  nodeMap: Map<number, Node>;
+  rootIndex: number;
+  maxSymbols: number;  // This is actually maxBitTraversals!
 }
 
-// ============= Parse dictionary =============
-
-interface ParsedDict {
-  entries: HuffmanEntry[];
-  maxSymbols: number;
-  dataStart: number;
+class MinHeap {
+  items: Node[] = [];
+  push(node: Node) { this.items.push(node); this.items.sort((a, b) => a.freq - b.freq); }
+  pop(): Node | undefined { return this.items.shift(); }
+  size(): number { return this.items.length; }
 }
 
-function parseDict(stream: Buffer): ParsedDict {
-  let pos = 0;
+function parseAndBuildTree(buf: Buffer): { state: DecoderState; dataStart: number } {
+  const entryCount = buf.readUInt32LE(0);
+  const entries: Node[] = [];
   
-  // Entry count (uint32 LE)
-  const entryCount = stream.readUInt32LE(pos);
-  pos += 4;
-  
-  const entries: HuffmanEntry[] = [];
-  
-  // Read entries (8 bytes each)
-  for (let i = 0; i < entryCount && pos + 8 <= stream.length; i++) {
-    // Bytes 0-2: unused (but byte 0 is read)
-    // Byte 3: symbol value
-    const symbol = stream[pos + 3];
-    
-    // Bytes 4-7: frequency (uint32 LE)
-    const frequency = stream.readUInt32LE(pos + 4);
-    
-    entries.push({ symbol, frequency });
-    pos += 8;
+  let offset = 4;
+  for (let i = 0; i < entryCount; i++) {
+    const symbol = buf[offset];
+    const fb = Buffer.alloc(4);
+    fb.writeUInt32LE(buf.readUInt32LE(offset + 4));
+    entries.push({ isLeaf: 1, symbol, index: -1, left: -1, right: -1, freq: fb.readFloatLE(0) });
+    offset += 8;
   }
   
-  // Max symbols (uint32 LE)
-  const maxSymbols = stream.readUInt32LE(pos);
-  pos += 4;
+  const maxSymbols = buf.readUInt32LE(offset);
+  const dataStart = offset + 4;
   
-  console.log(`    Entries: ${entryCount}, maxSymbols: ${maxSymbols}, dataStart: ${pos}`);
+  // Build Huffman tree
+  const queue = new MinHeap();
+  for (const e of entries) queue.push({ ...e });
   
-  return { entries, maxSymbols, dataStart: pos };
+  const nodeMap = new Map<number, Node>();
+  let idx = 0;
+  
+  while (queue.size() > 1) {
+    const left = queue.pop()!;
+    if (left.isLeaf) { left.index = idx; nodeMap.set(idx++, left); }
+    
+    const right = queue.pop()!;
+    if (right.isLeaf) { right.index = idx; nodeMap.set(idx++, right); }
+    
+    const combined: Node = {
+      isLeaf: 0, symbol: 0, index: idx,
+      left: left.index, right: right.index,
+      freq: left.freq + right.freq
+    };
+    nodeMap.set(idx++, combined);
+    queue.push(combined);
+  }
+  
+  return { state: { nodeMap, rootIndex: idx - 1, maxSymbols }, dataStart };
 }
 
-// ============= Build Huffman tree (FUN_004b6570) =============
-
-function buildTree(entries: HuffmanEntry[]): { nodes: HuffmanNode[]; root: number } {
-  if (entries.length === 0) {
-    return { nodes: [{ leafFlag: 1, symbol: 0, leftChild: -1, rightChild: -1 }], root: 0 };
-  }
-  
-  // Create initial nodes from entries (all leaves)
-  const nodes: HuffmanNode[] = [];
-  
-  // Priority queue: [nodeIndex, frequency]
-  let queue: Array<{ idx: number; freq: number }> = [];
-  
-  for (const entry of entries) {
-    const idx = nodes.length;
-    nodes.push({
-      leafFlag: 1,  // Non-zero = leaf
-      symbol: entry.symbol,
-      leftChild: -1,
-      rightChild: -1,
-    });
-    queue.push({ idx, freq: entry.frequency });
-  }
-  
-  // Sort by frequency
-  queue.sort((a, b) => a.freq - b.freq);
-  
-  // Build tree
-  while (queue.length > 1) {
-    const left = queue.shift()!;
-    const right = queue.shift()!;
-    
-    const parentIdx = nodes.length;
-    nodes.push({
-      leafFlag: 0,  // Internal node
-      symbol: 0,
-      leftChild: left.idx,
-      rightChild: right.idx,
-    });
-    
-    const parentFreq = left.freq + right.freq;
-    
-    // Insert sorted
-    let inserted = false;
-    for (let i = 0; i < queue.length; i++) {
-      if (queue[i].freq > parentFreq) {
-        queue.splice(i, 0, { idx: parentIdx, freq: parentFreq });
-        inserted = true;
-        break;
-      }
-    }
-    if (!inserted) queue.push({ idx: parentIdx, freq: parentFreq });
-  }
-  
-  return { nodes, root: queue.length > 0 ? queue[0].idx : 0 };
-}
-
-// ============= Decode Huffman bitstream (FUN_004b6250) =============
-
-function huffmanDecode(
-  stream: Buffer,
-  dataStart: number,
-  nodes: HuffmanNode[],
-  root: number,
-  maxSymbols: number
-): number[] {
+// Decode with BIT TRAVERSAL limit (not symbol count!)
+function decode(state: DecoderState, buf: Buffer, dataStart: number): number[] {
   const output: number[] = [];
-  let currentNode = root;
   let bytePos = dataStart;
+  let nodeIdx = state.rootIndex;
+  let local_4 = 0;  // Bit traversal counter
   
-  // Process byte-by-byte, bit-by-bit (LSB first)
-  while (output.length < maxSymbols && bytePos < stream.length) {
-    const byte = stream[bytePos];
+  while (bytePos < buf.length) {
+    let byte = buf[bytePos];
     
-    // Process 8 bits per byte
-    for (let bitIdx = 0; bitIdx < 8 && output.length < maxSymbols; bitIdx++) {
-      const bit = (byte >> bitIdx) & 1;
-      
-      const node = nodes[currentNode];
-      if (!node) break;
-      
-      // Navigate: bit=0 -> left, bit=1 -> right
-      const nextIdx = bit === 0 ? node.leftChild : node.rightChild;
-      
-      if (nextIdx < 0 || nextIdx >= nodes.length) {
-        // Invalid, reset to root
-        currentNode = root;
-        continue;
+    for (let bit = 0; bit < 8; bit++) {
+      // Original: if (param_1[4] <= local_4) break;
+      // Check BEFORE incrementing
+      if (state.maxSymbols <= local_4) {
+        return output;
       }
+      local_4++;
       
-      const nextNode = nodes[nextIdx];
+      const node = state.nodeMap.get(nodeIdx);
+      if (!node) return output;
       
-      if (nextNode.leafFlag !== 0) {
-        // Leaf - output symbol and reset to root
-        output.push(nextNode.symbol);
-        currentNode = root;
-      } else {
-        // Internal - continue traversal
-        currentNode = nextIdx;
+      nodeIdx = (byte & 1) === 0 ? node.left : node.right;
+      byte >>= 1;
+      
+      const next = state.nodeMap.get(nodeIdx);
+      if (!next) return output;
+      
+      if (next.isLeaf) {
+        output.push(next.symbol);
+        nodeIdx = state.rootIndex;
       }
     }
-    
     bytePos++;
   }
   
   return output;
 }
 
-// ============= V2 Header =============
-
-function parseHeader(buffer: Buffer) {
-  return {
-    magic: buffer.toString('ascii', 0, 4),
-    version: buffer.readUInt8(4),
-    width: buffer.readUInt16BE(6),
-    height: buffer.readUInt16BE(8),
-    bpp: buffer.readUInt16BE(10),
-  };
-}
-
-// ============= Read streams from V2 =============
-
-function readStreams(buffer: Buffer, offset: number) {
-  let pos = offset;
-  
-  // Palette
-  const paletteSize = buffer[pos++];
+function parseV2(buf: Buffer) {
+  let pos = 14;
+  const paletteSize = buf[pos++];
   const palette: number[] = [];
-  for (let i = 0; i < paletteSize; i++) {
-    palette.push(buffer[pos++]);
-  }
+  for (let i = 0; i < paletteSize; i++) palette.push(buf[pos++]);
   
-  // Stream1 size (2x uint16 BE concatenated)
-  const s1SizeHi = buffer.readUInt16BE(pos); pos += 2;
-  const s1SizeLo = buffer.readUInt16BE(pos); pos += 2;
-  const s1Size = (s1SizeHi << 16) | s1SizeLo;
-  const stream1 = buffer.subarray(pos, pos + s1Size);
-  pos += s1Size;
+  const s1Size = (buf.readUInt16BE(pos) << 16) | buf.readUInt16BE(pos + 2); pos += 4;
+  const stream1 = buf.subarray(pos, pos + s1Size); pos += s1Size;
   
-  // Stream2 size
-  const s2SizeHi = buffer.readUInt16BE(pos); pos += 2;
-  const s2SizeLo = buffer.readUInt16BE(pos); pos += 2;
-  const s2Size = (s2SizeHi << 16) | s2SizeLo;
-  const stream2 = buffer.subarray(pos, pos + s2Size);
+  const s2Size = (buf.readUInt16BE(pos) << 16) | buf.readUInt16BE(pos + 2); pos += 4;
+  const stream2 = buf.subarray(pos, pos + s2Size);
   
-  return { paletteSize, palette, stream1, stream2 };
+  return { width: buf.readUInt16BE(6), height: buf.readUInt16BE(8), palette, stream1, stream2 };
 }
 
-// ============= Main V2 decode (FUN_004b57f0) =============
-
-async function decodeV2(inputPath: string, outputPath: string) {
-  console.log(`\n=== ITW V2 Decoder ===`);
-  console.log(`Input: ${inputPath}`);
+async function main() {
+  const inputPath = process.argv[2] || `${process.env.HOME}/Documents/tis/GRAFIK/10/28/74.ITW`;
+  const outputPath = process.argv[3] || `${process.env.HOME}/.openclaw/workspace/itw_v2_final.png`;
   
-  const buffer = fs.readFileSync(inputPath);
-  const header = parseHeader(buffer);
+  console.log('=== ITW V2 Final Decoder ===');
   
-  console.log(`\nHeader: ${header.width}×${header.height}, v${header.version}`);
+  const buf = fs.readFileSync(inputPath);
+  const data = parseV2(buf);
   
-  if (header.magic !== 'ITW_') throw new Error('Not ITW file');
-  if (header.version !== 2) throw new Error('Not V2');
+  console.log(`Image: ${data.width}×${data.height}`);
+  console.log(`Palette: [${data.palette.join(', ')}]`);
   
-  const { width, height } = header;
-  const totalPixels = width * height;
+  const { state: state1, dataStart: ds1 } = parseAndBuildTree(data.stream1);
+  console.log(`\nStream1: root=${state1.rootIndex}, maxTraversals=${state1.maxSymbols}`);
   
-  // Read streams
-  console.log(`\nReading streams:`);
-  const { paletteSize, palette, stream1, stream2 } = readStreams(buffer, 14);
-  console.log(`  Palette: ${paletteSize} entries: [${palette.join(', ')}]`);
-  console.log(`  Stream1: ${stream1.length} bytes`);
-  console.log(`  Stream2: ${stream2.length} bytes`);
+  const dec1 = decode(state1, data.stream1, ds1);
+  console.log(`Decoded1: ${dec1.length} symbols`);
   
-  // Parse dictionaries
-  console.log(`\nParsing dictionaries:`);
-  console.log(`  Stream1:`);
-  const dict1 = parseDict(stream1);
-  console.log(`  Stream2:`);
-  const dict2 = parseDict(stream2);
+  const { state: state2, dataStart: ds2 } = parseAndBuildTree(data.stream2);
+  const dec2 = decode(state2, data.stream2, ds2);
+  console.log(`Decoded2: ${dec2.length} symbols`);
   
-  // Build trees
-  console.log(`\nBuilding Huffman trees:`);
-  const tree1 = buildTree(dict1.entries);
-  const tree2 = buildTree(dict2.entries);
-  console.log(`  Tree1: ${tree1.nodes.length} nodes, root=${tree1.root}`);
-  console.log(`  Tree2: ${tree2.nodes.length} nodes, root=${tree2.root}`);
+  console.log('First 30 dec1:', dec1.slice(0, 30).join(', '));
   
-  // Decode
-  console.log(`\nDecoding bitstreams:`);
-  const decoded1 = huffmanDecode(stream1, dict1.dataStart, tree1.nodes, tree1.root, dict1.maxSymbols);
-  const decoded2 = huffmanDecode(stream2, dict2.dataStart, tree2.nodes, tree2.root, dict2.maxSymbols);
-  console.log(`  Decoded1: ${decoded1.length} symbols (expected ${dict1.maxSymbols})`);
-  console.log(`  Decoded2: ${decoded2.length} symbols (expected ${dict2.maxSymbols})`);
-  
-  // Combine (from FUN_004b57f0 interleave logic)
-  // threshold = paletteSize + 8
-  // if decoded1[i] < threshold: output decoded2, then decoded1
-  // else: output decoded1 only
-  
-  console.log(`\nCombining streams (threshold=${paletteSize + 8}):`);
+  // Combine
+  const totalPixels = data.width * data.height;
+  const threshold = data.palette.length + 8;
   const output = Buffer.alloc(totalPixels);
-  let outIdx = 0;
-  let d1Idx = 0;
-  let d2Idx = 0;
+  let out = 0, d1 = 0, d2 = 0;
   
-  const threshold = paletteSize + 8;
-  
-  while (outIdx < totalPixels && d1Idx < decoded1.length) {
-    const val1 = decoded1[d1Idx++];
-    
-    if (val1 < threshold && d2Idx < decoded2.length) {
-      // Output from both streams
-      if (outIdx < totalPixels) output[outIdx++] = decoded2[d2Idx++];
-      if (outIdx < totalPixels) output[outIdx++] = val1;
+  while (out < totalPixels && d1 < dec1.length) {
+    const v1 = dec1[d1++];
+    if (v1 < threshold && d2 < dec2.length) {
+      output[out++] = dec2[d2++];
+      if (out < totalPixels) output[out++] = v1;
     } else {
-      // Output from stream1 only
-      if (outIdx < totalPixels) output[outIdx++] = val1;
+      output[out++] = v1;
     }
   }
   
-  console.log(`  Output: ${outIdx}/${totalPixels} pixels`);
+  console.log(`Output: ${out}/${totalPixels}`);
   
-  // Save
-  await sharp(output, { raw: { width, height, channels: 1 } })
-    .png()
-    .toFile(outputPath);
+  // Map to palette values
+  for (let i = 0; i < output.length; i++) {
+    if (output[i] < data.palette.length) {
+      output[i] = data.palette[output[i]];
+    }
+  }
   
-  console.log(`\nSaved: ${outputPath}`);
+  await sharp(output, { raw: { width: data.width, height: data.height, channels: 1 } })
+    .png().toFile(outputPath);
+  
+  console.log('Saved:', outputPath);
 }
 
-// CLI
-const input = process.argv[2] || `${process.env.HOME}/Documents/tis/GRAFIK/10/28/74.ITW`;
-const output = process.argv[3] || `${process.env.HOME}/.openclaw/workspace/itw_v2_final.png`;
-
-decodeV2(input, output).catch(e => {
-  console.error('Error:', e.message);
-  process.exit(1);
-});
+main().catch(e => console.error('Error:', e.message));
