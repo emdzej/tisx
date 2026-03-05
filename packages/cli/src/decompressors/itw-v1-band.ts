@@ -7,7 +7,7 @@
  */
 
 import * as zlib from 'zlib';
-import { FISCHER_N, fischerDecode, levelScaleFactor, buildBitLengthTable, calcBitLengthQuant1 } from './itw-v1-fischer.js';
+import { FISCHER_N, fischerDecode, levelScaleFactor, calcBitLengthQuant1, getRankBitLength } from './itw-v1-fischer.js';
 import { placeSparseCoeffs } from './itw-v1-place.js';
 
 /**
@@ -59,7 +59,6 @@ export interface DecodedBand {
  * @param orientation - Band orientation flag (from bitstream: 0 or 1)
  * @param bandOffset - piVar13 per-band offset (Q15 float)
  * @param diffTable - Fischer diff table (5×201)
- * @param bitLengthTable - Precomputed bit-lengths per position (201 entries)
  */
 export function decodeBand(
   data: Buffer,
@@ -72,7 +71,6 @@ export function decodeBand(
   orientation: number,
   bandOffset: number,
   diffTable: number[][],
-  bitLengthTable: number[],
 ): DecodedBand {
   const result = new Float32Array(matrixWidth * matrixHeight);
 
@@ -151,19 +149,22 @@ export function decodeBand(
   const fischerStream = zlib.inflateSync(data.subarray(cursor.pos, cursor.pos + compSizeFischer));
   cursor.pos += compSizeFischer;
 
-  // Read Fischer codewords: bits per codeword from bitLengthTable[position]
+  // Read Fischer codewords: bits per codeword from hardcoded rank table
   const fischerReader = new BitReader(fischerStream);
   const codewords = new Uint32Array(posCount);
   for (let i = 0; i < posCount; i++) {
-    const bits = bitLengthTable[positions[i]] || 0;
+    const bits = getRankBitLength(quant, positions[i]);
     codewords[i] = fischerReader.readBits(bits);
   }
 
   // 4. coeff_reconstruct_quant2 — place decoded coefficients with strided placement
-  // From Ghidra: fVar8 = (scale / quant) * offset
-  //              result = decoded[j] * (fVar8 / levelScaleFactor(extra)) + 0.0
-  // param_9 = 0.0 (passed from dispatch)
-  const scaleFac = (bandScale / quant) * bandOffset;
+  // From Ghidra coeff_reconstruct_quant2:
+  //   fVar8 = (param_7 / (float)param_6) * param_10
+  //         = (scale / bandValue) * offset
+  //   result = decoded[j] * (fVar8 / levelScaleFactor(extra)) + param_9
+  //   param_9 = 0.0 (passed from dispatch)
+  // EXPERIMENT: treat offset as raw integer (undo Q15) — multiply back by 32768
+  const scaleFac = (bandScale / bandValue) * (bandOffset * 32768.0);
   let posIdx = 0;
 
   if (orientation === 1) {

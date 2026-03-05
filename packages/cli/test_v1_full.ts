@@ -13,7 +13,7 @@ import * as zlib from 'zlib';
 import { PNG } from 'pngjs';
 import { parseFileHeader, parseFrameHeader } from './src/decompressors/itw-v1-header.js';
 import { reconstructLevel, splitEvenOdd } from './src/decompressors/itw-v1-wavelet.js';
-import { buildDiffTable, buildBitLengthTable } from './src/decompressors/itw-v1-fischer.js';
+import { buildDiffTable } from './src/decompressors/itw-v1-fischer.js';
 import { decodeBand } from './src/decompressors/itw-v1-band.js';
 
 const ITW_PATH = '/Users/emdzej/Documents/tis/GRAFIK/1/03/95/26.ITW';
@@ -61,9 +61,8 @@ const bandInfos: BandInfo[] = [
   { level: 4, subband: 'HH', width: splitEvenOdd(dims[3].w)[1], height: splitEvenOdd(dims[3].h)[1] },
 ];
 
-// Build rank/diff table and precomputed bit-length table
+// Build diff table for Fischer decoder
 const diffTable = buildDiffTable();
-const bitLengthTable = buildBitLengthTable(diffTable);
 
 // Debug: print band params from header
 for (let band = 0; band < 11; band++) {
@@ -95,7 +94,7 @@ for (let band = 0; band < 11; band++) {
     info.width, info.height,
     quant,
     bp.value, bp.scale, orientation, bp.offset,
-    diffTable, bitLengthTable,
+    diffTable,
   );
   bandData.push(decoded.data);
 
@@ -107,7 +106,7 @@ for (let band = 0; band < 11; band++) {
     if (v < bMin) bMin = v;
     if (v > bMax) bMax = v;
   }
-  console.log(`Band ${band.toString().padStart(2)} (L${info.level} ${info.subband}): quant=${quant}, ${info.width}x${info.height}, orient=${present ? 1 : 0}, consumed=${cursor.pos - prevPos}B, nonzero=${nonZero}/${decoded.data.length}, range=${bMin.toFixed(2)}..${bMax.toFixed(2)}`);
+  console.log(`Band ${band.toString().padStart(2)} (L${info.level} ${info.subband}): quant=${quant}, ${info.width}x${info.height}, orient=${orientation}, consumed=${cursor.pos - prevPos}B, nonzero=${nonZero}/${decoded.data.length}, range=${bMin.toFixed(4)}..${bMax.toFixed(4)}`);
 }
 
 // ============================================================

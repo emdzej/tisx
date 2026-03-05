@@ -59,6 +59,37 @@ export function buildBitLengthTable(diffTable: number[][]): number[] {
 }
 
 /**
+ * Hardcoded rank table from Ghidra's fischer_build_rank_table.
+ * 3 rows indexed by quant: [quant=2][201], [quant=4][201], [quant=8][31+padding]
+ * Values are BIT LENGTHS for reading Fischer codewords from the bitstream.
+ *
+ * This is DIFFERENT from ceil(log2(diffTable)) — the original uses a separate
+ * precomputed table that gives smaller bit lengths.
+ */
+const RANK_QUANT2: readonly number[] = [0, 2, 3, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10, 10];
+const RANK_QUANT4: readonly number[] = [0, 0, 3, 5, 7, 8, 9, 10, 10, 11, 11, 12, 12, 13, 13, 13, 14, 14, 14, 14, 15, 15, 15, 15, 15, 16, 16, 16, 16, 16, 16, 17, 17, 17, 17, 17, 17, 17, 18, 18, 18, 18, 18, 18, 18, 18, 18, 18, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 19, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 20, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 21, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 22, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 23, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 24, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25, 25];
+const RANK_QUANT8: readonly number[] = [0, 0, 0, 4, 7, 10, 12, 14, 15, 17, 18, 19, 20, 21, 22, 22, 23, 24, 24, 25, 26, 26, 27, 27, 27, 28, 28, 29, 29, 30, 30];
+
+/**
+ * Get bit length from the hardcoded rank table for a given quant and position.
+ * This is used in itw_decode_band's quant>=2 path for reading Fischer codewords.
+ *
+ * In Ghidra: calc_rank_bit_length(rank_table, quant, position, 0)
+ * The rank_table is indexed as: row = quant (2, 4, or 8), col = position (0..200)
+ */
+export function getRankBitLength(quant: number, position: number): number {
+  let table: readonly number[];
+  switch (quant) {
+    case 2: table = RANK_QUANT2; break;
+    case 4: table = RANK_QUANT4; break;
+    case 8: table = RANK_QUANT8; break;
+    default: return 0;
+  }
+  if (position < 0 || position >= table.length) return 0;
+  return table[position];
+}
+
+/**
  * calc_bit_length for quant<=1 path.
  * Chain from Ghidra:
  *   FUN_004b6ae0: count = value * 2 + 1
