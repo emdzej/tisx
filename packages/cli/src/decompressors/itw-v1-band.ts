@@ -99,7 +99,9 @@ export function decodeBand(
     //   quant1(param_1, param_2, param_6=bandValue, param_7=scale, param_9=0.0, param_10=offset)
     // So formula: (cw % (bandValue*2+1) - bandValue) * (scale/bandValue) * offset + 0.0
     const quantRange = bandValue * 2 + 1;
-    const scaleFac = (bandScale / bandValue) * bandOffset;
+    // EXPERIMENT: treat offset as raw integer (undo Q15) — multiply back by 32768
+    // Same as quant>=2 path
+    const scaleFac = (bandScale / bandValue) * (bandOffset * 32768.0);
 
     // Read codewords in column-major order: outer=x, inner=y
     // (source stride iVar3 = *(param_2+0x24) = 1 for simple int_table)
@@ -149,69 +151,120 @@ export function decodeBand(
   const fischerStream = zlib.inflateSync(data.subarray(cursor.pos, cursor.pos + compSizeFischer));
   cursor.pos += compSizeFischer;
 
-  // Read Fischer codewords: bits per codeword from hardcoded rank table
+  // Fischer codewords are read on-demand (only for k > 0 positions)
   const fischerReader = new BitReader(fischerStream);
-  const codewords = new Uint32Array(posCount);
+
+  // Read all Fischer codewords into array using positions[] bit lengths
+  const codewords: Uint32Array = new Uint32Array(posCount);
   for (let i = 0; i < posCount; i++) {
     const bits = getRankBitLength(quant, positions[i]);
-    codewords[i] = fischerReader.readBits(bits);
+    codewords[i] = bits > 0 ? fischerReader.readBits(bits) : 0;
   }
 
-  // 4. coeff_reconstruct_quant2 — place decoded coefficients with strided placement
-  // From Ghidra coeff_reconstruct_quant2:
-  //   fVar8 = (param_7 / (float)param_6) * param_10
-  //         = (scale / bandValue) * offset
-  //   result = decoded[j] * (fVar8 / levelScaleFactor(extra)) + param_9
-  //   param_9 = 0.0 (passed from dispatch)
-  // EXPERIMENT: treat offset as raw integer (undo Q15) — multiply back by 32768
+  // 4. coeff_reconstruct_quant2 — place decoded coefficients
+  //
+  // Position stream layout: one entry per block of size (1 x quant) or (quant x 1)
+  // For orientation=1 (vertical): iterate x outer, blockY inner
+  //   - posCount ≈ W * ceil(H / quant)
+  //   - Each position entry: if k > 0, decode Fischer (5 values), place in column
+  // For orientation=0 (horizontal): iterate y outer, blockX inner
+  //   - posCount ≈ H * ceil(W / quant)
+  //
+  // Fischer decodes FISCHER_N=5 values. Place them sequentially (step=1) within the block.
+  // If k=0, skip (all zeros for this block).
+  
+  // 4. coeff_reconstruct_quant2 — place decoded coefficients
+  //
+  // Scale factor for dequantization (from Ghidra):
+  // fVar8 = (scale / bandValue) * offset
+  // Both scale and offset are Q15 floats (already converted from fixed-point)
+  // but we need to treat offset as if it's still in Q15 range → multiply by 32768
+  
   const scaleFac = (bandScale / bandValue) * (bandOffset * 32768.0);
+  
   let posIdx = 0;
 
   if (orientation === 1) {
-    // Vertical stepping: outer Y (step = FISCHER_N * 2), inner X
-    // FUN_004b6ba0 calls: (matrix, decoded, x, baseY, 0, 2) and (matrix, decoded, x, baseY+1, 0, 2)
-    for (let baseY = 0; baseY < matrixHeight && posIdx < posCount; baseY += FISCHER_N * 2) {
-      for (let x = 0; x < matrixWidth && posIdx < posCount; x++) {
-        // First of pair
-        const dec1 = fischerDecode(codewords[posIdx], positions[posIdx], diffTable);
-        const sf1 = levelScaleFactor(extraValues[posIdx]);
-        const src1 = new Float32Array(FISCHER_N);
-        for (let j = 0; j < FISCHER_N; j++) src1[j] = dec1[j] * (scaleFac / sf1);
-        placeSparseCoeffs(result, matrixWidth, matrixHeight, src1, FISCHER_N, 1, x, baseY, 0, 2);
+    // Vertical: orient=1
+    // Outer loop: y steps by FISCHER_N * 2 (which is 10)
+    // Inner loop: x steps by 1
+    // Places two interleaved blocks per inner loop
+    for (let y = 0; y < matrixHeight; y += FISCHER_N * 2) {
+      for (let x = 0; x < matrixWidth; x++) {
+        // Block 1
+        let k1 = 0;
+        if (posIdx < posCount) k1 = positions[posIdx];
+        if (k1 > 0) {
+          const extra = extraValues[posIdx];
+          const codeword = codewords[posIdx];
+          const decoded = fischerDecode(codeword, k1, diffTable);
+          const sf = levelScaleFactor(extra);
+          for (let j = 0; j < FISCHER_N; j++) {
+            const placeY = y + j * 2;
+            if (placeY < matrixHeight) {
+              result[x * matrixHeight + placeY] = decoded[j] * (scaleFac / sf);
+            }
+          }
+        }
         posIdx++;
-
-        if (posIdx >= posCount) break;
-
-        // Second of pair
-        const dec2 = fischerDecode(codewords[posIdx], positions[posIdx], diffTable);
-        const sf2 = levelScaleFactor(extraValues[posIdx]);
-        const src2 = new Float32Array(FISCHER_N);
-        for (let j = 0; j < FISCHER_N; j++) src2[j] = dec2[j] * (scaleFac / sf2);
-        placeSparseCoeffs(result, matrixWidth, matrixHeight, src2, FISCHER_N, 1, x, baseY + 1, 0, 2);
+        
+        // Block 2
+        let k2 = 0;
+        if (posIdx < posCount) k2 = positions[posIdx];
+        if (k2 > 0) {
+          const extra = extraValues[posIdx];
+          const codeword = codewords[posIdx];
+          const decoded = fischerDecode(codeword, k2, diffTable);
+          const sf = levelScaleFactor(extra);
+          for (let j = 0; j < FISCHER_N; j++) {
+            const placeY = y + 1 + j * 2;
+            if (placeY < matrixHeight) {
+              result[x * matrixHeight + placeY] = decoded[j] * (scaleFac / sf);
+            }
+          }
+        }
         posIdx++;
       }
     }
   } else {
-    // Horizontal stepping: outer X (step = FISCHER_N * 2), inner Y
-    // FUN_004b6ba0 calls: (matrix, decoded, baseX, y, 2, 0) and (matrix, decoded, baseX+1, y, 2, 0)
-    for (let baseX = 0; baseX < matrixWidth && posIdx < posCount; baseX += FISCHER_N * 2) {
-      for (let y = 0; y < matrixHeight && posIdx < posCount; y++) {
-        // First of pair
-        const dec1 = fischerDecode(codewords[posIdx], positions[posIdx], diffTable);
-        const sf1 = levelScaleFactor(extraValues[posIdx]);
-        const src1 = new Float32Array(FISCHER_N);
-        for (let j = 0; j < FISCHER_N; j++) src1[j] = dec1[j] * (scaleFac / sf1);
-        placeSparseCoeffs(result, matrixWidth, matrixHeight, src1, FISCHER_N, 1, baseX, y, 2, 0);
+    // Horizontal: orient=0
+    // Outer loop: x steps by FISCHER_N * 2 (which is 10)
+    // Inner loop: y steps by 1
+    // Places two interleaved blocks per inner loop
+    for (let x = 0; x < matrixWidth; x += FISCHER_N * 2) {
+      for (let y = 0; y < matrixHeight; y++) {
+        // Block 1
+        let k1 = 0;
+        if (posIdx < posCount) k1 = positions[posIdx];
+        if (k1 > 0) {
+          const extra = extraValues[posIdx];
+          const codeword = codewords[posIdx];
+          const decoded = fischerDecode(codeword, k1, diffTable);
+          const sf = levelScaleFactor(extra);
+          for (let j = 0; j < FISCHER_N; j++) {
+            const placeX = x + j * 2;
+            if (placeX < matrixWidth) {
+              result[placeX * matrixHeight + y] = decoded[j] * (scaleFac / sf);
+            }
+          }
+        }
         posIdx++;
-
-        if (posIdx >= posCount) break;
-
-        // Second of pair
-        const dec2 = fischerDecode(codewords[posIdx], positions[posIdx], diffTable);
-        const sf2 = levelScaleFactor(extraValues[posIdx]);
-        const src2 = new Float32Array(FISCHER_N);
-        for (let j = 0; j < FISCHER_N; j++) src2[j] = dec2[j] * (scaleFac / sf2);
-        placeSparseCoeffs(result, matrixWidth, matrixHeight, src2, FISCHER_N, 1, baseX + 1, y, 2, 0);
+        
+        // Block 2
+        let k2 = 0;
+        if (posIdx < posCount) k2 = positions[posIdx];
+        if (k2 > 0) {
+          const extra = extraValues[posIdx];
+          const codeword = codewords[posIdx];
+          const decoded = fischerDecode(codeword, k2, diffTable);
+          const sf = levelScaleFactor(extra);
+          for (let j = 0; j < FISCHER_N; j++) {
+            const placeX = x + 1 + j * 2;
+            if (placeX < matrixWidth) {
+              result[placeX * matrixHeight + y] = decoded[j] * (scaleFac / sf);
+            }
+          }
+        }
         posIdx++;
       }
     }
