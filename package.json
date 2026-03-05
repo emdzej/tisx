@@ -13,6 +13,7 @@
     "format": "turbo run format"
   },
   "devDependencies": {
+    "tsx": "^4.19.2",
     "turbo": "^2.5.6"
   },
   "dependencies": {

@@ -47,17 +47,21 @@ interface BandInfo {
   height: number;
 }
 
+// Correct DWT subband dimensions:
+// LH: low-pass horizontal (width=LL.w), high-pass vertical (height=outH-LL.h)
+// HL: high-pass horizontal (width=outW-LL.w), low-pass vertical (height=LL.h)
+// HH: high-pass both (width=outW-LL.w, height=outH-LL.h)
 const bandInfos: BandInfo[] = [
-  { level: 1, subband: 'LH', width: splitEvenOdd(W)[1], height: dims[1].h },
-  { level: 1, subband: 'HL', width: dims[1].w, height: splitEvenOdd(H)[1] },
-  { level: 2, subband: 'LH', width: splitEvenOdd(dims[1].w)[1], height: dims[2].h },
-  { level: 2, subband: 'HL', width: dims[2].w, height: splitEvenOdd(dims[1].h)[1] },
+  { level: 1, subband: 'LH', width: dims[1].w, height: splitEvenOdd(H)[1] },        // LL.w x (outH-LL.h)
+  { level: 1, subband: 'HL', width: splitEvenOdd(W)[1], height: dims[1].h },        // (outW-LL.w) x LL.h
+  { level: 2, subband: 'LH', width: dims[2].w, height: splitEvenOdd(dims[1].h)[1] },
+  { level: 2, subband: 'HL', width: splitEvenOdd(dims[1].w)[1], height: dims[2].h },
   { level: 2, subband: 'HH', width: splitEvenOdd(dims[1].w)[1], height: splitEvenOdd(dims[1].h)[1] },
-  { level: 3, subband: 'LH', width: splitEvenOdd(dims[2].w)[1], height: dims[3].h },
-  { level: 3, subband: 'HL', width: dims[3].w, height: splitEvenOdd(dims[2].h)[1] },
+  { level: 3, subband: 'LH', width: dims[3].w, height: splitEvenOdd(dims[2].h)[1] },
+  { level: 3, subband: 'HL', width: splitEvenOdd(dims[2].w)[1], height: dims[3].h },
   { level: 3, subband: 'HH', width: splitEvenOdd(dims[2].w)[1], height: splitEvenOdd(dims[2].h)[1] },
-  { level: 4, subband: 'LH', width: splitEvenOdd(dims[3].w)[1], height: dims[4].h },
-  { level: 4, subband: 'HL', width: dims[4].w, height: splitEvenOdd(dims[3].h)[1] },
+  { level: 4, subband: 'LH', width: dims[4].w, height: splitEvenOdd(dims[3].h)[1] },
+  { level: 4, subband: 'HL', width: splitEvenOdd(dims[3].w)[1], height: dims[4].h },
   { level: 4, subband: 'HH', width: splitEvenOdd(dims[3].w)[1], height: splitEvenOdd(dims[3].h)[1] },
 ];
 

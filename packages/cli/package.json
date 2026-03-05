@@ -11,11 +11,20 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "start": "node dist/cli.js"
   },
-  "keywords": ["bmw", "tis", "itw", "decoder", "wavelet"],
+  "keywords": [
+    "bmw",
+    "tis",
+    "itw",
+    "decoder",
+    "wavelet"
+  ],
   "author": "emdzej",
   "license": "MIT",
   "devDependencies": {
     "@types/node": "^20.0.0",
     "typescript": "^5.0.0"
+  },
+  "dependencies": {
+    "pngjs": "^7.0.0"
   }
 }
