@@ -16,7 +16,7 @@ const frameHdr = parseFrameHeader(buf, fileHdr.dataOffset);
 console.log(`${fileHdr.width}x${fileHdr.height}, levels=${frameHdr.numLevels}, range=${frameHdr.rangeMin}-${frameHdr.rangeMax}`);
 
 // 2 mystery bytes between frame header end and first zlib block
-const blocks = extractSizePrefixedZlibBlocks(buf, frameHdr.zlibOffset + 2);
+const blocks = extractSizePrefixedZlibBlocks(buf, frameHdr.zlibOffset);
 console.log(`${blocks.length} blocks`);
 
 const W = fileHdr.width, H = fileHdr.height;
