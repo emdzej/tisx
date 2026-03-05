@@ -4,7 +4,7 @@
 import * as fs from 'fs';
 import { PNG } from 'pngjs';
 import { parseFileHeader, parseFrameHeader } from './src/decompressors/itw-v1-header.js';
-import { extractSizePrefixedZlibBlocks } from './src/decompressors/itw-v1-blocks.js';
+import { extractBlocksAuto } from './src/decompressors/itw-v1-blocks.js';
 import { reconstructLevel, splitEvenOdd } from './src/decompressors/itw-v1-wavelet.js';
 
 const ITW_PATH = '/Users/emdzej/Documents/tis/GRAFIK/1/03/95/26.ITW';
