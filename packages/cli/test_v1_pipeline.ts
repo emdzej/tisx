@@ -4,7 +4,7 @@
 import * as fs from 'fs';
 import { PNG } from 'pngjs';
 import { parseFileHeader, parseFrameHeader } from './src/decompressors/itw-v1-header.js';
-import { extractZlibBlocks } from './src/decompressors/itw-v1-blocks.js';
+import { extractSizePrefixedZlibBlocks } from './src/decompressors/itw-v1-blocks.js';
 import { reconstructLevel, splitEvenOdd } from './src/decompressors/itw-v1-wavelet.js';
 
 const ITW_PATH = '/Users/emdzej/Documents/tis/GRAFIK/1/03/95/26.ITW';
@@ -16,7 +16,7 @@ const frameHdr = parseFrameHeader(buf, fileHdr.dataOffset);
 console.log(`${fileHdr.width}x${fileHdr.height}, levels=${frameHdr.numLevels}, range=${frameHdr.rangeMin}-${frameHdr.rangeMax}`);
 
 // 2 mystery bytes between frame header end and first zlib block
-const blocks = extractZlibBlocks(buf, frameHdr.zlibOffset + 2);
+const blocks = extractSizePrefixedZlibBlocks(buf, frameHdr.zlibOffset + 2);
 console.log(`${blocks.length} blocks`);
 
 const W = fileHdr.width, H = fileHdr.height;
