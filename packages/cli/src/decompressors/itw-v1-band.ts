@@ -16,21 +16,28 @@ import { FISCHER_N, fischerDecode, levelScaleFactor } from './itw-v1-fischer.js'
 class BitReader {
   private buf: Uint8Array;
   private pos = 0;
-  private bitPos = 0;
+  private bitPos = 0; // bit index 0..7, LSB-first
 
   constructor(data: Uint8Array | Buffer) {
     this.buf = data instanceof Uint8Array ? data : new Uint8Array(data);
   }
 
+  // LSB-first reader: first call returns bit 0 of byte 0
   readBits(n: number): number {
     let val = 0;
     for (let i = 0; i < n; i++) {
       if (this.pos >= this.buf.length) return val;
-      val = (val << 1) | ((this.buf[this.pos] >> (7 - this.bitPos)) & 1);
+      const bit = (this.buf[this.pos] >> this.bitPos) & 1;
+      val |= (bit << i);
       this.bitPos++;
       if (this.bitPos >= 8) { this.bitPos = 0; this.pos++; }
     }
     return val;
+  }
+
+  // return how many bytes consumed (including partial byte)
+  consumedBytes(): number {
+    return this.pos + (this.bitPos > 0 ? 1 : 0);
   }
 }
 
@@ -97,6 +104,8 @@ export interface DecodedBand {
  * @param bandOffset - piVar13 per-band offset (Q15 float)
  * @param rankTable - Fischer diff/rank table
  */
+import { placeSparseCoeffs } from './itw-v1-place.js';
+
 export function decodeBand(
   data: Buffer,
   cursor: { pos: number },
@@ -111,11 +120,9 @@ export function decodeBand(
 ): DecodedBand {
   const result = new Float32Array(matrixWidth * matrixHeight);
 
-  if (!bandPresence) {
-    // Band not present — all zeros (with offset)
-    result.fill(bandOffset);
-    return { data: result, width: matrixWidth, height: matrixHeight };
-  }
+  // Note: frame header 'bandPresence' field carries orientation flag (0/1) in original.
+  // Treat the boolean as orientation: true->1, false->0. We do NOT skip decoding — all 11 bands are read sequentially.
+  const orientation = bandPresence ? 1 : 0;
 
   if (quant < 2) {
     // === Quant 1 path ===
