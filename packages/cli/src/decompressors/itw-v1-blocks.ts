@@ -1,52 +1,34 @@
-/**
- * ITW V1 ZLIB block extraction.
- *
- * The data stream contains concatenated zlib-compressed blocks
- * starting at zlibOffset (from frame header).
- * Each block starts with 0x78 (zlib magic).
- */
-
 import * as zlib from 'zlib';
 
 /**
- * Extract consecutive zlib blocks from the buffer starting at `offset`.
- * Uses boundary scanning (look for next 0x78 zlib header) with
- * inflate validation.
+ * ITW V1 compressed-block extraction.
+ * The stream after the frame header is a sequence of blocks:
+ *   [compSize: uint16BE][compData: compSize bytes]
+ * Each block decompresses (zlib) to a band payload.
+ *
+ * This function reads consecutive size-prefixed compressed blocks starting
+ * at `offset` until `offset` reaches the end of buffer or a compSize of 0.
  */
-export function extractZlibBlocks(data: Buffer, offset: number): Buffer[] {
+export function extractSizePrefixedZlibBlocks(data: Buffer, offset: number): Buffer[] {
   const blocks: Buffer[] = [];
   let pos = offset;
-
-  while (pos < data.length) {
-    if (data[pos] !== 0x78) break;
-
-    // Find next zlib header
-    let next = pos + 2;
-    while (next < data.length) {
-      if (
-        data[next] === 0x78 &&
-        (data[next + 1] === 0x01 || data[next + 1] === 0x9c || data[next + 1] === 0xda)
-      ) {
-        try {
-          zlib.inflateSync(data.subarray(pos, next));
-          break;
-        } catch {
-          // not a valid boundary, continue
-        }
-      }
-      next++;
-    }
-
-    try {
-      const inflated = zlib.inflateSync(
-        data.subarray(pos, next >= data.length ? undefined : next),
-      );
-      blocks.push(inflated);
-      pos = next;
-    } catch {
+  while (pos + 2 <= data.length) {
+    const compSize = data.readUInt16BE(pos);
+    pos += 2;
+    if (compSize === 0) break;
+    if (pos + compSize > data.length) {
+      // malformed or truncated - stop
       break;
     }
+    const comp = data.subarray(pos, pos + compSize);
+    try {
+      const dec = zlib.inflateSync(comp);
+      blocks.push(dec);
+    } catch (e) {
+      // decompression error - stop
+      break;
+    }
+    pos += compSize;
   }
-
   return blocks;
 }
