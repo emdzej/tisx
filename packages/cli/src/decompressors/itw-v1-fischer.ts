@@ -2,32 +2,36 @@
  * ITW V1 Fischer arithmetic decoder — faithful port from Ghidra.
  *
  * Fischer block size: DAT_004ed11c = 5
- * Table dimensions: FISCHER_N × MAX_K (5 × 11)
  *
  * Key functions ported:
  * - fischer_build_diff_table (recurrence: T[i][j] = T[i][j-1] + T[i-1][j] + T[i-1][j-1])
- * - fischer_decode (sequential symbol extraction using rank table lookups)
- * - calc_rank_bit_length (3D table lookup → simplified to 2D for our case)
+ * - fischer_decode (sequential symbol extraction using diff table lookups)
  * - level_scale_factor: (16.0 - extraBits) * 0.0625
+ *
+ * The diff table is extended to MAX_POS (201) columns to handle position values
+ * up to 200 (7-bit base + 4-bit extra).
  */
 
 export const FISCHER_N = 5;
-export const MAX_K = 2 * FISCHER_N + 1; // 11
+export const MAX_POS = 201; // rank_table is 9×201 in original
 
 /**
  * Build the diff/probability table.
  * T[0][j] = 1, T[i][0] = 1
  * T[i][j] = T[i][j-1] + T[i-1][j] + T[i-1][j-1]
+ *
+ * Rows: 0..FISCHER_N-1 (5 rows)
+ * Cols: 0..MAX_POS-1 (201 columns)
  */
 export function buildDiffTable(): number[][] {
   const T: number[][] = [];
   for (let i = 0; i < FISCHER_N; i++) {
-    T[i] = new Array(MAX_K).fill(0);
+    T[i] = new Array(MAX_POS).fill(0);
     T[i][0] = 1;
   }
-  for (let j = 0; j < MAX_K; j++) T[0][j] = 1;
+  for (let j = 0; j < MAX_POS; j++) T[0][j] = 1;
   for (let i = 1; i < FISCHER_N; i++) {
-    for (let j = 1; j < MAX_K; j++) {
+    for (let j = 1; j < MAX_POS; j++) {
       T[i][j] = T[i][j - 1] + T[i - 1][j] + T[i - 1][j - 1];
     }
   }
@@ -35,72 +39,107 @@ export function buildDiffTable(): number[][] {
 }
 
 /**
- * calc_rank_bit_length equivalent — just a table lookup.
- * In Ghidra: indexes into the rank table as rank[n][k].
- * We use the diff table directly since rank === diff for our use case.
+ * Build precomputed bit-length table from diff table.
+ * bitLengths[k] = ceil(log2(diffTable[FISCHER_N-1][k]))
+ *
+ * Used in quant>=2 path: read_bits(bitLengths[position]) for Fischer codewords.
  */
-function rankLookup(table: number[][], n: number, k: number): number {
-  if (n < 0 || n >= FISCHER_N || k < 0 || k >= MAX_K) return 0;
+export function buildBitLengthTable(diffTable: number[][]): number[] {
+  const row = diffTable[FISCHER_N - 1];
+  const bits: number[] = new Array(MAX_POS);
+  for (let k = 0; k < MAX_POS; k++) {
+    const count = row[k];
+    if (count <= 1) {
+      bits[k] = 0;
+    } else {
+      bits[k] = Math.ceil(Math.log2(count));
+    }
+  }
+  return bits;
+}
+
+/**
+ * calc_bit_length for quant<=1 path.
+ * Chain from Ghidra:
+ *   FUN_004b6ae0: count = value * 2 + 1
+ *   FUN_004b6b10: bits = ceil(log2(count))
+ *   calc_bit_length: bytes = ceil(bits * DAT_004ed130)
+ * Then itw_decode_band uses: read_bits(bytes << 3) = read whole-byte-aligned bits.
+ *
+ * Returns the number of BITS to read (bytes << 3).
+ */
+export function calcBitLengthQuant1(value: number): number {
+  const count = value * 2 + 1;
+  if (count <= 1) return 0;
+  const rawBits = Math.ceil(Math.log2(count));
+  const bytes = Math.ceil(rawBits / 8);
+  return bytes << 3; // convert back to bits (byte-aligned)
+}
+
+/**
+ * Diff table lookup — same as calc_rank_bit_length in Ghidra.
+ * Just indexes into the table: table[n][k].
+ */
+function diffLookup(table: number[][], n: number, k: number): number {
+  if (n < 0 || n >= FISCHER_N || k < 0 || k >= MAX_POS) return 0;
   return table[n][k];
 }
 
 /**
  * Fischer decode — 1:1 port of Ghidra fischer_decode.
  *
- * Decodes FISCHER_N coefficients from (codeword, magnitudeSum) using rank table.
+ * Decodes FISCHER_N coefficients from (codeword, magnitudeSum) using diff table.
  *
  * @param codeword - The encoded value (param_2 in Ghidra)
  * @param magnitudeSum - Sum of absolute values (param_3 in Ghidra)
- * @param rankTable - The diff/rank table (param_4 in Ghidra)
+ * @param diffTable - The diff/probability table (param_4 in Ghidra)
  * @returns Array of FISCHER_N decoded integer coefficients
  */
 export function fischerDecode(
   codeword: number,
   magnitudeSum: number,
-  rankTable: number[][],
+  diffTable: number[][],
 ): Int32Array {
   const N = FISCHER_N;
   const out = new Int32Array(N);
 
-  let symbolsLeft = N; // uVar5 = uVar3 (starts at FISCHER_N)
-  let code = codeword; // iVar4 tracks accumulated offset
-  let remaining = magnitudeSum; // local_10
-
   if (magnitudeSum === 0) {
-    // All zeros
-    return out;
+    return out; // all zeros
   }
 
+  let symbolsLeft = N;
+  let code = codeword;
+  let remaining = magnitudeSum;
+  let outPos = 0;
+
   for (let pos = 0; pos < N; pos++) {
-    if (code === 0) {
-      // codeword exhausted — symbol is 0, remaining handled at end
+    if (code === 0 && pos < N) {
+      // codeword exhausted — symbol is 0
       out[pos] = 0;
+      outPos = pos + 1;
       break;
     }
 
-    // Number of codewords for zero symbol: rank[symbolsLeft-2][remaining]
-    const zeroCount = rankLookup(rankTable, symbolsLeft - 2, remaining);
+    // Number of codewords for zero symbol: diff[symbolsLeft-2][remaining]
+    const zeroCount = diffLookup(diffTable, symbolsLeft - 2, remaining);
 
     if (code < zeroCount) {
-      // Symbol is 0
       out[pos] = 0;
     } else {
-      // Find absolute value by iterating
       let absVal = 1;
       let accumulated = zeroCount;
 
       while (true) {
         const subRemaining = remaining - absVal;
         if (subRemaining < 0) break;
-        const count = rankLookup(rankTable, symbolsLeft - 2, subRemaining);
+        const count = diffLookup(diffTable, symbolsLeft - 2, subRemaining);
         if (code < accumulated + count * 2) break;
         accumulated += count * 2;
         absVal++;
       }
 
-      // Determine sign: first half = positive, second half = negative
       const subRemaining = remaining - absVal;
-      const count = rankLookup(rankTable, symbolsLeft - 2, subRemaining);
+      const count = diffLookup(diffTable, symbolsLeft - 2, subRemaining);
 
       if (code < accumulated + count) {
         out[pos] = absVal;
@@ -109,21 +148,21 @@ export function fischerDecode(
         accumulated += count;
       }
 
-      code = code - accumulated; // advance past consumed codewords
+      code = code - accumulated;
       remaining -= absVal;
     }
 
     symbolsLeft--;
+    outPos = pos + 1;
   }
 
   // Ghidra: if remaining > 0 after loop, adjust last symbol
-  if (remaining > 0) {
-    const lastIdx = N - 1;
-    const lastAbs = Math.abs(out[lastIdx]);
+  if (remaining > 0 && outPos > 0) {
+    const lastIdx = outPos - 1;
     if (out[lastIdx] >= 0) {
-      out[lastIdx] = lastAbs + remaining;
+      out[lastIdx] = out[lastIdx] + remaining;
     } else {
-      out[lastIdx] = -(lastAbs + remaining);
+      out[lastIdx] = out[lastIdx] - remaining;
     }
   }
 
