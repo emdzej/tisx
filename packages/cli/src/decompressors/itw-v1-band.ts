@@ -101,7 +101,7 @@ export function decodeBand(
     const quantRange = bandValue * 2 + 1;
     // EXPERIMENT: treat offset as raw integer (undo Q15) — multiply back by 32768
     // Same as quant>=2 path
-    const scaleFac = (bandScale / bandValue) * (bandOffset * 32768.0);
+    const scaleFac = (bandScale / bandValue) * bandOffset;
 
     // Read codewords in column-major order: outer=x, inner=y
     // (source stride iVar3 = *(param_2+0x24) = 1 for simple int_table)
@@ -180,7 +180,7 @@ export function decodeBand(
   // Both scale and offset are Q15 floats (already converted from fixed-point)
   // but we need to treat offset as if it's still in Q15 range → multiply by 32768
   
-  const scaleFac = (bandScale / bandValue) * (bandOffset * 32768.0);
+  const scaleFac = (bandScale / bandValue) * bandOffset;
   
   let posIdx = 0;
 

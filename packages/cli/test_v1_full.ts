@@ -139,6 +139,13 @@ console.log(`Stream cursor: ${cursor.pos} / ${buf.length} (${buf.length - cursor
 // ============================================================
 // Reconstruct: L4 → L3 → L2 → L1 → L0
 // ============================================================
+
+function logRange(name, arr) {
+  let min=Infinity, max=-Infinity;
+  for(const v of arr){ if(v<min) min=v; if(v>max) max=v; }
+  console.log(name + ' range: ' + min.toFixed(2) + ' .. ' + max.toFixed(2));
+}
+
 let curW = llW, curH = llH;
 
 // L4 reconstruction
@@ -152,7 +159,7 @@ let current = reconstructLevel(
   dims[3].w, dims[3].h,
 );
 curW = dims[3].w; curH = dims[3].h;
-console.log(`After L4: ${curW}x${curH}`);
+console.log(`After L4: ${curW}x${curH}`); logRange("L4 out", current);
 
 // L3 reconstruction
 current = reconstructLevel(
@@ -165,7 +172,7 @@ current = reconstructLevel(
   dims[2].w, dims[2].h,
 );
 curW = dims[2].w; curH = dims[2].h;
-console.log(`After L3: ${curW}x${curH}`);
+console.log(`After L3: ${curW}x${curH}`); logRange("L3 out", current);
 
 // L2 reconstruction
 current = reconstructLevel(
@@ -178,7 +185,7 @@ current = reconstructLevel(
   dims[1].w, dims[1].h,
 );
 curW = dims[1].w; curH = dims[1].h;
-console.log(`After L2: ${curW}x${curH}`);
+console.log(`After L2: ${curW}x${curH}`); logRange("L2 out", current);
 
 // L1 reconstruction (L0 HH is zeroed per itw_decode_main)
 const hhW = splitEvenOdd(W)[1], hhH = splitEvenOdd(H)[1];
@@ -206,7 +213,7 @@ const scale = 255 / (max - min);
 const png = new PNG({ width: W, height: H, colorType: 0 });
 for (let y = 0; y < H; y++) {
   for (let x = 0; x < W; x++) {
-    const v = Math.round(Math.max(0, Math.min(255, (current[x * curH + y] - min) * scale)));
+    const v = Math.round(Math.max(0, Math.min(255, current[x * curH + y])));
     const idx = (y * W + x) * 4;
     png.data[idx] = v; png.data[idx + 1] = v; png.data[idx + 2] = v; png.data[idx + 3] = 255;
   }

@@ -52,7 +52,7 @@ export interface ItwFrameHeader {
 const FILE_HEADER_SIZE = 14;
 const DATA_SIZE_BYTES = 4;
 const DATA_STREAM_OFFSET = FILE_HEADER_SIZE + DATA_SIZE_BYTES; // 18
-const Q15_DIVISOR = 32768.0;
+const Q15_DIVISOR = 127.0;
 const NUM_BANDS = 11;
 
 export function parseFileHeader(buf: Buffer): ItwFileHeader {
