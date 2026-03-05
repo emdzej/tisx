@@ -211,21 +211,67 @@ export function decodeBand(
     codewords[i] = fischerReader.readBits(bits);
   }
 
-  // 4. coeff_reconstruct_quant2:
-  // For each (position, codeword): Fischer decode → N coefficients
-  // Then place into matrix with dequantization
+  // 4. coeff_reconstruct_quant2 — orientation-dependent pair processing
   const scaleFac = (bandScale / quant) * bandOffset;
-  let outIdx = 0;
+  let posIdx = 0;
 
-  for (let i = 0; i < posStream.length; i++) {
-    const decoded = fischerDecode(codewords[i], magnitudes[i], rankTable);
-    const sf = levelScaleFactor(extraValues[i]);
+  if (orientation === 1) {
+    // vertical stepping: outer over Y blocks (step = FISCHER_N * 2), inner over X
+    const yStepBlock = FISCHER_N * 2;
+    for (let baseY = 0; baseY < matrixHeight; baseY += yStepBlock) {
+      for (let x = 0; x < matrixWidth; x++) {
+        if (posIdx >= posStream.length) break;
+        // first block -> start at (x, baseY), step (0,2)
+        const cw1 = codewords[posIdx];
+        const mag1 = magnitudes[posIdx];
+        const sf1 = levelScaleFactor(extraValues[posIdx]);
+        const dec1 = fischerDecode(cw1, mag1, rankTable);
+        const src1 = new Float32Array(dec1.length);
+        for (let j = 0; j < dec1.length; j++) src1[j] = dec1[j] * (scaleFac / sf1) + bandOffset;
+        placeSparseCoeffs(result, matrixWidth, matrixHeight, src1, src1.length, 1, x, baseY, 0, 2);
+        posIdx++;
 
-    for (let j = 0; j < FISCHER_N; j++) {
-      if (outIdx < result.length) {
-        result[outIdx] = decoded[j] * (scaleFac / sf) + bandOffset;
-        outIdx++;
+        if (posIdx >= posStream.length) break;
+        // second block -> start at (x, baseY+1), step (0,2)
+        const cw2 = codewords[posIdx];
+        const mag2 = magnitudes[posIdx];
+        const sf2 = levelScaleFactor(extraValues[posIdx]);
+        const dec2 = fischerDecode(cw2, mag2, rankTable);
+        const src2 = new Float32Array(dec2.length);
+        for (let j = 0; j < dec2.length; j++) src2[j] = dec2[j] * (scaleFac / sf2) + bandOffset;
+        placeSparseCoeffs(result, matrixWidth, matrixHeight, src2, src2.length, 1, x, baseY + 1, 0, 2);
+        posIdx++;
       }
+      if (posIdx >= posStream.length) break;
+    }
+  } else {
+    // horizontal stepping: outer over X blocks (step = FISCHER_N * 2), inner over Y
+    const xStepBlock = FISCHER_N * 2;
+    for (let baseX = 0; baseX < matrixWidth; baseX += xStepBlock) {
+      for (let y = 0; y < matrixHeight; y++) {
+        if (posIdx >= posStream.length) break;
+        // first block -> start at (baseX, y), step (2,0)
+        const cw1 = codewords[posIdx];
+        const mag1 = magnitudes[posIdx];
+        const sf1 = levelScaleFactor(extraValues[posIdx]);
+        const dec1 = fischerDecode(cw1, mag1, rankTable);
+        const src1 = new Float32Array(dec1.length);
+        for (let j = 0; j < dec1.length; j++) src1[j] = dec1[j] * (scaleFac / sf1) + bandOffset;
+        placeSparseCoeffs(result, matrixWidth, matrixHeight, src1, src1.length, 1, baseX, y, 2, 0);
+        posIdx++;
+
+        if (posIdx >= posStream.length) break;
+        // second block -> start at (baseX+1, y), step (2,0)
+        const cw2 = codewords[posIdx];
+        const mag2 = magnitudes[posIdx];
+        const sf2 = levelScaleFactor(extraValues[posIdx]);
+        const dec2 = fischerDecode(cw2, mag2, rankTable);
+        const src2 = new Float32Array(dec2.length);
+        for (let j = 0; j < dec2.length; j++) src2[j] = dec2[j] * (scaleFac / sf2) + bandOffset;
+        placeSparseCoeffs(result, matrixWidth, matrixHeight, src2, src2.length, 1, baseX + 1, y, 2, 0);
+        posIdx++;
+      }
+      if (posIdx >= posStream.length) break;
     }
   }
 
