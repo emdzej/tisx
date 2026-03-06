@@ -138,7 +138,7 @@ export function reconstructLevel(
     const lCol = new Float32Array(llH);
     const hCol = new Float32Array(lhH);
     for (let y = 0; y < llH; y++) lCol[y] = ll[x * llH + y];
-    for (let y = 0; y < lhH; y++) hCol[y] = lh[x * lhH + y];
+    for (let y = 0; y < lhH; y++) hCol[y] = (x < lhW ? lh[x * lhH + y] : 0);
     const col = polyphaseReconstruct1D(lCol, llH, hCol, lhH, outH, hP);
     for (let y = 0; y < outH; y++) temp1[x * outH + y] = col[y];
   }
@@ -147,7 +147,7 @@ export function reconstructLevel(
     const lCol = new Float32Array(hlH);
     const hCol = new Float32Array(hhH);
     for (let y = 0; y < hlH; y++) lCol[y] = hl[x * hlH + y];
-    for (let y = 0; y < hhH; y++) hCol[y] = hh[x * hhH + y];
+    for (let y = 0; y < hhH; y++) hCol[y] = (x < hhW ? hh[x * hhH + y] : 0);
     const col = polyphaseReconstruct1D(lCol, hlH, hCol, hhH, outH, hP);
     for (let y = 0; y < outH; y++) temp2[x * outH + y] = col[y];
   }
