@@ -202,8 +202,9 @@ export function fischerDecode(
 
 /**
  * level_scale_factor from Ghidra:
- * (16.0 - extraBits) * 0.0625 = (16 - extraBits) / 16
+ * DAT_004ed1d0 = 16.0 (double 0x4030000000000000)
+ * DAT_004ed1d8 = 0.6875 (double 0x3fb0000000000000)
  */
 export function levelScaleFactor(extraBits: number): number {
-  return (16.0 - extraBits) * 0.0625;
+  return (16.0 - extraBits) * 0.6875;
 }

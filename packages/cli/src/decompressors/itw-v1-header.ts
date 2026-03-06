@@ -52,7 +52,8 @@ export interface ItwFrameHeader {
 const FILE_HEADER_SIZE = 14;
 const DATA_SIZE_BYTES = 4;
 const DATA_STREAM_OFFSET = FILE_HEADER_SIZE + DATA_SIZE_BYTES; // 18
-const Q15_DIVISOR = 127.0;
+// From Ghidra: DAT_004ed1f0 = 0x42000000 (float 32.0)
+const Q15_DIVISOR = 32.0;
 const NUM_BANDS = 11;
 
 export function parseFileHeader(buf: Buffer): ItwFileHeader {
@@ -85,12 +86,12 @@ export function parseFrameHeader(buf: Buffer, dataOffset: number): ItwFrameHeade
   const numLevels = buf[pos++];
   const filterType = buf[pos++];
 
-  // Bitstream: read NUM_BANDS bits MSB-first
+  // Bitstream: 11 orientation bits, LSB-first (per Ghidra)
   const bandPresence: boolean[] = [];
   let byteVal = buf[pos];
   let bitIdx = 0;
   for (let i = 0; i < NUM_BANDS; i++) {
-    bandPresence.push(((byteVal >> (7 - bitIdx)) & 1) === 1);
+    bandPresence.push(((byteVal >> bitIdx) & 1) === 1);
     bitIdx++;
     if (bitIdx >= 8) {
       bitIdx = 0;

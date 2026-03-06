@@ -71,6 +71,7 @@ export function decodeBand(
   orientation: number,
   bandOffset: number,
   diffTable: number[][],
+  detailGain: number = 1.0,
 ): DecodedBand {
   const result = new Float32Array(matrixWidth * matrixHeight);
 
@@ -108,7 +109,7 @@ export function decodeBand(
     for (let x = 0; x < matrixWidth; x++) {
       for (let y = 0; y < matrixHeight; y++) {
         const cw = reader.readBits(bitsPerCodeword);
-        result[x * matrixHeight + y] = (cw % quantRange - bandValue) * scaleFac;
+        result[x * matrixHeight + y] = (cw % quantRange - bandValue) * scaleFac * detailGain;
       }
     }
 
@@ -202,7 +203,7 @@ export function decodeBand(
           for (let j = 0; j < FISCHER_N; j++) {
             const placeY = y + j * 2;
             if (placeY < matrixHeight) {
-              result[x * matrixHeight + placeY] = decoded[j] * (scaleFac / sf);
+              result[x * matrixHeight + placeY] = decoded[j] * (scaleFac / sf) * detailGain;
             }
           }
         }
@@ -219,7 +220,7 @@ export function decodeBand(
           for (let j = 0; j < FISCHER_N; j++) {
             const placeY = y + 1 + j * 2;
             if (placeY < matrixHeight) {
-              result[x * matrixHeight + placeY] = decoded[j] * (scaleFac / sf);
+              result[x * matrixHeight + placeY] = decoded[j] * (scaleFac / sf) * detailGain;
             }
           }
         }
@@ -244,7 +245,7 @@ export function decodeBand(
           for (let j = 0; j < FISCHER_N; j++) {
             const placeX = x + j * 2;
             if (placeX < matrixWidth) {
-              result[placeX * matrixHeight + y] = decoded[j] * (scaleFac / sf);
+              result[placeX * matrixHeight + y] = decoded[j] * (scaleFac / sf) * detailGain;
             }
           }
         }
@@ -261,7 +262,7 @@ export function decodeBand(
           for (let j = 0; j < FISCHER_N; j++) {
             const placeX = x + 1 + j * 2;
             if (placeX < matrixWidth) {
-              result[placeX * matrixHeight + y] = decoded[j] * (scaleFac / sf);
+              result[placeX * matrixHeight + y] = decoded[j] * (scaleFac / sf) * detailGain;
             }
           }
         }

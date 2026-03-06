@@ -93,12 +93,14 @@ for (let band = 0; band < 11; band++) {
   const orientation = present ? 1 : 0;
 
   const prevPos = cursor.pos;
+  const detailGain = band <= 7 ? 1.6 : 1.2; // S16_T12
   const decoded = decodeBand(
     buf, cursor,
     info.width, info.height,
     quant,
     bp.value, bp.scale, orientation, bp.offset,
     diffTable,
+    detailGain,
   );
   bandData.push(decoded.data);
 
