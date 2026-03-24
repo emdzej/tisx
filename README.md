@@ -1,49 +1,16 @@
-# tisx - TIS Image Format Decoder
+# tisx - BMW TIS Web App
 
-Decoder for BMW TIS (Technical Information System) image formats.
+A self-deployable web application that reimplements the BMW Technical Information System (TIS) — allowing you to browse service manuals, repair instructions, and technical documents by vehicle series, model, and engine.
 
-## Supported Formats
+## Overview
 
-| Format | Magic | Status |
-|--------|-------|--------|
-| ITW V1 | 0x0300 | ✅ Working (LL-only, blurry) |
-| ITW V2 | 0x0400 | 🔄 Planned |
+The original TIS was a Windows desktop application distributed on CD/DVD. This project provides the same functionality as a modern web app you can host yourself, backed by the original TIS SQLite databases.
 
-## Installation
+## Prerequisites
 
-```bash
-npm install -g tisx
-```
-
-## Usage
-
-```bash
-# Show file info
-tisx info image.itw
-
-# Decode to PNG
-tisx decode image.itw
-tisx decode image.itw output.png
-```
-
-## ITW V1 Format
-
-The ITW V1 format uses wavelet compression with CDF 5/3 transform:
-- 4 decomposition levels
-- Stream 16 contains LL4 (lowest resolution low-pass band)
-- Detail streams use zigzag encoding
-- Current decoder uses bilinear upscale from LL4
-
-### Output Quality
-
-The current decoder produces **blurry but recognizable** images.
-Full quality requires decoding detail bands (work in progress).
-
-## Documentation
-
-See `docs/` for detailed format documentation:
-- `itw-v1-wavelet.md` - File structure and wavelet format
-- `itw-v1-decompiled.md` - Reverse engineering notes
+- The original TIS data exported to two SQLite databases:
+  - `tis.sqlite` — vehicle and document index
+  - `docs.sqlite` — document content (Markdown)
 
 ## Docker deployment
 
@@ -51,14 +18,14 @@ See `docs/` for detailed format documentation:
 
 ```bash
 mkdir -p data
-# Place your databases in ./data
-# - ./data/tis.sqlite
-# - ./data/docs.sqlite
+# Place your databases in ./data:
+#   ./data/tis.sqlite
+#   ./data/docs.sqlite
 
 docker compose up --build
 ```
 
-The server will be available on `http://localhost:3000`.
+The app will be available at `http://localhost:3000`.
 
 ### Docker CLI
 
@@ -66,9 +33,6 @@ The server will be available on `http://localhost:3000`.
 docker build -t tisx .
 
 docker run --rm -p 3000:3000 \
-  -e PORT=3000 \
-  -e TIS_DB_PATH=/data/tis.sqlite \
-  -e DOCS_DB_PATH=/data/docs.sqlite \
   -v $(pwd)/data/tis.sqlite:/data/tis.sqlite \
   -v $(pwd)/data/docs.sqlite:/data/docs.sqlite \
   tisx
@@ -76,10 +40,31 @@ docker run --rm -p 3000:3000 \
 
 ### Environment variables
 
-- `PORT` (default: 3000)
-- `TIS_DB_PATH` (default: `/data/tis.sqlite`)
-- `DOCS_DB_PATH` (default: `/data/docs.sqlite`)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `3000` | HTTP port to listen on |
+| `TIS_DB_PATH` | `/data/tis.sqlite` | Path to the TIS index database |
+| `DOCS_DB_PATH` | `/data/docs.sqlite` | Path to the document content database |
+
+## Development
+
+```bash
+pnpm install
+pnpm dev
+```
+
+The monorepo contains three packages:
+
+| Package | Description |
+|---------|-------------|
+| `packages/web` | SvelteKit frontend |
+| `packages/server` | Express API server |
+| `packages/cli` | CLI utilities |
+
+## Related
+
+ITW image format decoding (used internally by TIS for graphics) is handled by a separate project: [itw-decoder](https://github.com/emdzej/itw-decoder).
 
 ## License
 
-MIT
+[PolyForm Noncommercial 1.0.0](https://polyformproject.org/licenses/noncommercial/1.0.0/)
