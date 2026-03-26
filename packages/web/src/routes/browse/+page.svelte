@@ -169,7 +169,14 @@
 	};
 
 	const openDocument = (doc: DocumentListItem) => {
-		goto(resolve(`/doc/${doc.id}` as `/${string}`));
+		// Forward the current browsing context (vehicle selection + any placeholder values)
+		// to the document page so it can substitute RTF placeholders appropriately.
+		const params = new URLSearchParams();
+		if (seriesId) params.set('series', seriesId);
+		if (modelId) params.set('model', modelId);
+		if (engineId) params.set('engine', engineId);
+		const query = params.toString();
+		goto(resolve(`/doc/${doc.id}${query ? `?${query}` : ''}` as `/${string}`));
 	};
 
 	const loadVehicleNames = async () => {

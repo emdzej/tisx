@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/stores';
 	import { browser } from '$app/environment';
 	import type { PageProps } from './$types';
 
@@ -64,18 +65,46 @@
 		return raw;
 	};
 
+	/**
+	 * Build the URL for fetching document HTML, appending browsing-context params
+	 * so the server can substitute placeholders like --TYP--, --FGSTNR--, etc.
+	 *
+	 * Context params come from the URL search params (passed through from the browse page):
+	 *   series, model, engine  — vehicle selection IDs (informational)
+	 *   typ    — vehicle type designation (--TYP--)
+	 *   fgstnr — chassis / VIN number (--FGSTNR--)
+	 *   modell — model designation (--MODELL--)
+	 *   motor  — engine designation (--MOTOR--)
+	 *   kaross — body type (--KAROSS--)
+	 */
+	const buildContentUrl = (baseUrl: string): string => {
+		const url = new URL(baseUrl, window.location.origin);
+		url.searchParams.set('format', 'html');
+
+		// Forward browsing-context params from the current page URL
+		const contextParams = ['series', 'model', 'engine', 'typ', 'fgstnr', 'modell', 'motor', 'kaross'];
+		for (const param of contextParams) {
+			const value = $page.url.searchParams.get(param);
+			if (value) {
+				url.searchParams.set(param, value);
+			}
+		}
+
+		return url.pathname + url.search;
+	};
+
 	async function loadTextContent(url: string) {
 		textError = false;
 		textLoading = true;
 		textContent = '';
 		renderedHtml = '';
 		try {
-			// Request HTML from server (Pandoc conversion)
-			const response = await fetch(`${url}?format=html`);
+			const contentUrl = buildContentUrl(url);
+			const response = await fetch(contentUrl);
 			if (!response.ok) throw new Error('Text not found');
 			const payload = (await response.json()) as { content?: string };
 			textContent = payload.content ?? '';
-			// Content is already HTML from Pandoc
+			// Content is already HTML from Pandoc (RTF → HTML conversion with placeholder substitution)
 			renderedHtml = textContent;
 		} catch {
 			textError = true;
@@ -212,10 +241,10 @@
 				<h2 class="text-lg font-semibold">Text content</h2>
 				{#if textUrl && !textError && !textLoading}
 					<article
-						class="prose prose-sm max-w-none rounded-2xl border border-slate-200 bg-white p-5 prose-slate dark:border-slate-800 dark:bg-slate-950/70 dark:prose-invert"
+						class="prose prose-sm max-w-none rounded-2xl border border-slate-200 bg-white p-5 prose-slate dark:border-slate-800 dark:bg-slate-950/70 dark:prose-invert [&_.tis-inline-image]:mx-auto [&_.tis-inline-image]:block [&_.tis-inline-image]:max-w-full"
 					>
 						{#if renderedHtml}
-							<!-- eslint-disable-next-line svelte/no-at-html-tags -- server-rendered HTML from Pandoc -->
+							<!-- eslint-disable-next-line svelte/no-at-html-tags -- server-rendered HTML from Pandoc with RTF→HTML conversion -->
 							{@html renderedHtml}
 						{:else}
 							<p class="text-slate-500 dark:text-slate-400">Text file was empty.</p>
