@@ -43,7 +43,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install ITW image decoder
-RUN npm install -g @emdzej/itw-decoder@0.2.0
+RUN npm install -g @emdzej/itw-decoder@0.3.0
 
 # Copy unshieldv3 binary from builder
 COPY --from=unshieldv3-builder /src/unshieldv3/build/unshieldv3 /usr/local/bin/unshieldv3
