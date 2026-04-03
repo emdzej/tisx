@@ -1,8 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
-import initSqlJs, { type Database as SqlJsDatabase } from 'sql.js';
-import { readFileSync } from 'node:fs';
+import Database from 'better-sqlite3';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { execSync } from 'node:child_process';
@@ -21,8 +20,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 const dbPath = process.env.TIS_DB_PATH ?? './data/tis.sqlite';
-const docsDbPath = process.env.DOCS_DB_PATH ?? './data/docs.sqlite';
-const imagesDbPath = process.env.IMAGES_DB_PATH ?? './data/images.db';
 
 const parseId = (value: string): number | null => {
   const id = Number.parseInt(value, 10);
@@ -31,61 +28,30 @@ const parseId = (value: string): number | null => {
 
 const padDokart = (dokartId: number) => String(dokartId).padStart(6, '0');
 
-const queryAll = <T>(
-  db: SqlJsDatabase,
-  sql: string,
-  params: Array<number | string> = [],
-): T[] => {
-  const stmt = db.prepare(sql);
-  stmt.bind(params);
-  const rows: T[] = [];
-  while (stmt.step()) {
-    rows.push(stmt.getAsObject() as T);
-  }
-  stmt.free();
-  return rows;
-};
-
-const queryGet = <T>(
-  db: SqlJsDatabase,
-  sql: string,
-  params: Array<number | string> = [],
-): T | undefined => {
-  const stmt = db.prepare(sql);
-  stmt.bind(params);
-  const row = stmt.step() ? (stmt.getAsObject() as T) : undefined;
-  stmt.free();
-  return row;
-};
-
-const hasTable = (db: SqlJsDatabase, tableName: string): boolean => {
-  const row = queryGet<{ name?: string }>(
-    db,
-    "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
-    [tableName],
-  );
+const hasTable = (db: Database.Database, tableName: string): boolean => {
+  const row = db
+    .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = ?")
+    .get(tableName) as { name?: string } | undefined;
   return Boolean(row?.name);
 };
 
-const getDocType = (db: SqlJsDatabase, dokartId: number): DocType | null => {
-  const row = queryGet<DocType>(
-    db,
-    'SELECT DOKART_ID as id, DOKART_KZ as code, DOKART_BEZ as name, HGNAME as mainGroupLabel, UGNAME as subGroupLabel FROM TDOKART WHERE DOKART_ID = ?;',
-    [dokartId],
-  );
+const getDocType = (db: Database.Database, dokartId: number): DocType | null => {
+  const row = db
+    .prepare(
+      'SELECT DOKART_ID as id, DOKART_KZ as code, DOKART_BEZ as name, HGNAME as mainGroupLabel, UGNAME as subGroupLabel FROM TDOKART WHERE DOKART_ID = ?',
+    )
+    .get(dokartId) as DocType | undefined;
   return row ?? null;
 };
 
 /**
- * Decode raw bytes from sql.js into a string.
+ * Decode raw bytes from better-sqlite3 into a string.
  * RTF files are Windows-1252 / latin-1 encoded.
+ * better-sqlite3 returns BLOBs as Buffers.
  */
-const decodeContent = (raw: string | Uint8Array | Record<string, number>): string => {
-  if (raw instanceof Uint8Array) {
-    return new TextDecoder('latin1').decode(raw);
-  }
-  if (typeof raw === 'object' && raw !== null) {
-    return new TextDecoder('latin1').decode(new Uint8Array(Object.values(raw)));
+const decodeContent = (raw: Buffer | string): string => {
+  if (Buffer.isBuffer(raw)) {
+    return raw.toString('latin1');
   }
   return String(raw ?? '');
 };
@@ -197,36 +163,10 @@ const rtfToHtml = (
 };
 
 const main = async () => {
-  const SQL = await initSqlJs();
-  const db = new SQL.Database(readFileSync(dbPath));
-  const docsDb = new SQL.Database(readFileSync(docsDbPath));
+  const db = new Database(dbPath, { readonly: true, fileMustExist: true });
 
-  // images.db is large (4.9 GB); sql.js loads entire files into memory which is not feasible.
-  // We access it via the sqlite3 CLI subprocess instead.
-  // This is cached per-process via execSync for each image request.
-  const getImageFromDb = (imageId: string): { data: Buffer; contentType: string } | null => {
-    try {
-      const result = execSync(
-        `sqlite3 "${imagesDbPath}" "SELECT hex(data), content_type FROM images WHERE id = '${imageId.replace(/'/g, "''")}' LIMIT 1;"`,
-        { encoding: 'utf-8', maxBuffer: 20 * 1024 * 1024 },
-      ).trim();
-
-      if (!result) return null;
-
-      const pipeIdx = result.indexOf('|');
-      if (pipeIdx < 0) return null;
-
-      const hexData = result.slice(0, pipeIdx);
-      const contentType = result.slice(pipeIdx + 1).trim() || 'image/png';
-
-      if (!hexData) return null;
-
-      const data = Buffer.from(hexData, 'hex');
-      return { data, contentType };
-    } catch {
-      return null;
-    }
-  };
+  // Enable WAL mode for better concurrent read performance (no-op on readonly, but harmless)
+  db.pragma('journal_mode = WAL');
 
   const app = express();
   app.use(cors());
@@ -245,9 +185,13 @@ const main = async () => {
 
   /**
    * GET /api/images/:id
-   * Serve an image from images.db by its id (e.g. 1/13/97/26.png).
+   * Serve an image from the IMAGES table by its id (e.g. 1/13/97/26.PNG).
    * The id is passed as a wildcard path segment.
    */
+  const getImageStmt = db.prepare(
+    'SELECT data, content_type FROM IMAGES WHERE id = ? LIMIT 1',
+  );
+
   app.get('/api/images/*', (req, res) => {
     const imageId = (req.params as Record<string, string>)[0];
     if (!imageId) {
@@ -255,20 +199,23 @@ const main = async () => {
       return;
     }
 
-    const image = getImageFromDb(imageId);
-    if (!image) {
+    const row = getImageStmt.get(imageId.toUpperCase()) as
+      | { data: Buffer; content_type: string }
+      | undefined;
+
+    if (!row) {
       res.status(404).json({ error: 'Image not found' });
       return;
     }
 
-    res.set('Content-Type', image.contentType);
+    res.set('Content-Type', row.content_type || 'image/png');
     res.set('Cache-Control', 'public, max-age=31536000, immutable');
-    res.send(image.data);
+    res.send(row.data);
   });
 
   /**
    * GET /api/docs/:path
-   * Serve document content from docs.sqlite.
+   * Serve document content from the DOCS table.
    * Supports ?format=html to convert RTF → HTML via pandoc.
    * Accepts browsing-context query params for placeholder substitution:
    *   ?typ=<vehicle type>
@@ -280,6 +227,8 @@ const main = async () => {
    *   &model=<model id>      (informational, for display)
    *   &engine=<engine id>    (informational, for display)
    */
+  const getDocStmt = db.prepare('SELECT data FROM DOCS WHERE id = ?');
+
   app.get('/api/docs/*', (req, res) => {
     const docId = (req.params as Record<string, string>)[0];
     const format = req.query.format as string | undefined;
@@ -289,18 +238,16 @@ const main = async () => {
       return;
     }
 
-    const row = queryGet<{ content: string | Uint8Array }>(
-      docsDb,
-      'SELECT content FROM content WHERE id = ?',
-      [docId],
-    );
+    const row = getDocStmt.get(docId.toUpperCase()) as
+      | { data: Buffer | string }
+      | undefined;
 
     if (!row) {
       res.status(404).json({ error: 'Document not found' });
       return;
     }
 
-    const content = decodeContent(row.content as string | Uint8Array | Record<string, number>);
+    const content = decodeContent(row.data as Buffer | string);
 
     if (format === 'html') {
       // Build text-placeholder substitution map from query params
@@ -321,10 +268,11 @@ const main = async () => {
   });
 
   app.get('/api/series', (_req, res) => {
-    const rows = queryAll<Series>(
-      db,
-      'SELECT DISTINCT m.BAUREIHE_ID as id, b.BENENNUNG as code, m.BAUREIHE_LANG as name FROM TFZGMODELL m LEFT JOIN TBENENNUNG b ON m.BAUREIHE_ID = b.KEY ORDER BY m.BAUREIHE_LANG;',
-    );
+    const rows = db
+      .prepare(
+        'SELECT DISTINCT m.BAUREIHE_ID as id, b.BENENNUNG as code, m.BAUREIHE_LANG as name FROM TFZGMODELL m LEFT JOIN TBENENNUNG b ON m.BAUREIHE_ID = b.KEY ORDER BY m.BAUREIHE_LANG',
+      )
+      .all() as Series[];
     res.json(rows);
   });
 
@@ -335,11 +283,11 @@ const main = async () => {
       return;
     }
 
-    const rows = queryAll<Model>(
-      db,
-      'SELECT m.MODELL_ID as id, b.BENENNUNG as code, m.MODELL_LANG as name, MIN(m.PRODDAT_AB) as productionFrom, MAX(m.PRODDAT_BIS) as productionTo FROM TFZGMODELL m LEFT JOIN TBENENNUNG b ON m.MODELL_ID = b.KEY WHERE m.BAUREIHE_ID = ? GROUP BY m.MODELL_ID, b.BENENNUNG, m.MODELL_LANG ORDER BY m.MODELL_LANG;',
-      [seriesId],
-    );
+    const rows = db
+      .prepare(
+        'SELECT m.MODELL_ID as id, b.BENENNUNG as code, m.MODELL_LANG as name, MIN(m.PRODDAT_AB) as productionFrom, MAX(m.PRODDAT_BIS) as productionTo FROM TFZGMODELL m LEFT JOIN TBENENNUNG b ON m.MODELL_ID = b.KEY WHERE m.BAUREIHE_ID = ? GROUP BY m.MODELL_ID, b.BENENNUNG, m.MODELL_LANG ORDER BY m.MODELL_LANG',
+      )
+      .all(seriesId) as Model[];
 
     if (rows.length === 0) {
       res.status(404).json({ error: 'Series not found' });
@@ -356,11 +304,11 @@ const main = async () => {
       return;
     }
 
-    const rows = queryAll<Engine>(
-      db,
-      'SELECT DISTINCT t.MOTOR_ID as id, b.BENENNUNG as name FROM TFZGTYP t LEFT JOIN TBENENNUNG b ON t.MOTOR_ID = b.KEY WHERE t.MODELL_ID = ? ORDER BY b.BENENNUNG;',
-      [modelId],
-    );
+    const rows = db
+      .prepare(
+        'SELECT DISTINCT t.MOTOR_ID as id, b.BENENNUNG as name FROM TFZGTYP t LEFT JOIN TBENENNUNG b ON t.MOTOR_ID = b.KEY WHERE t.MODELL_ID = ? ORDER BY b.BENENNUNG',
+      )
+      .all(modelId) as Engine[];
 
     if (rows.length === 0) {
       res.status(404).json({ error: 'Model not found' });
@@ -371,10 +319,11 @@ const main = async () => {
   });
 
   app.get('/api/doctypes', (_req, res) => {
-    const rows = queryAll<DocType>(
-      db,
-      "SELECT DOKART_ID as id, DOKART_KZ as code, DOKART_BEZ as name, HGNAME as mainGroupLabel, UGNAME as subGroupLabel FROM TDOKART WHERE DOKART_KZ IN ('SI','RA','TD','AZD') ORDER BY DOKART_SORT;",
-    );
+    const rows = db
+      .prepare(
+        "SELECT DOKART_ID as id, DOKART_KZ as code, DOKART_BEZ as name, HGNAME as mainGroupLabel, UGNAME as subGroupLabel FROM TDOKART WHERE DOKART_KZ IN ('SI','RA','TD','AZD') ORDER BY DOKART_SORT",
+      )
+      .all() as DocType[];
     res.json(rows);
   });
 
@@ -395,10 +344,11 @@ const main = async () => {
     const fallbackTable = 'TZUKN000200';
 
     if (hasTable(db, groupTable)) {
-      const rows = queryAll<GroupNode>(
-        db,
-        `SELECT DISTINCT KNOTEN_ID as id, KNOTEN_KZ as code, KNOTEN_BEZ as name, VATER_ID as parentId FROM ${groupTable} WHERE VATER_ID = -1 ORDER BY KNOTEN_SORT, KNOTEN_ID;`,
-      );
+      const rows = db
+        .prepare(
+          `SELECT DISTINCT KNOTEN_ID as id, KNOTEN_KZ as code, KNOTEN_BEZ as name, VATER_ID as parentId FROM ${groupTable} WHERE VATER_ID = -1 ORDER BY KNOTEN_SORT, KNOTEN_ID`,
+        )
+        .all() as GroupNode[];
       res.json(rows);
       return;
     }
@@ -409,10 +359,11 @@ const main = async () => {
       return;
     }
 
-    const rows = queryAll<GroupNode>(
-      db,
-      `SELECT DISTINCT t.KNOTEN_ID as id, z.KNOTEN_KZ as code, z.KNOTEN_BEZ as name, -1 as parentId FROM ${thgrTable} t LEFT JOIN ${fallbackTable} z ON z.KNOTEN_ID = t.KNOTEN_ID AND z.VATER_ID = -1 ORDER BY t.KNOTEN_ID;`,
-    );
+    const rows = db
+      .prepare(
+        `SELECT DISTINCT t.KNOTEN_ID as id, z.KNOTEN_KZ as code, z.KNOTEN_BEZ as name, -1 as parentId FROM ${thgrTable} t LEFT JOIN ${fallbackTable} z ON z.KNOTEN_ID = t.KNOTEN_ID AND z.VATER_ID = -1 ORDER BY t.KNOTEN_ID`,
+      )
+      .all() as GroupNode[];
 
     res.json(rows);
   });
@@ -435,11 +386,11 @@ const main = async () => {
     const fallbackTable = 'TZUKN000200';
 
     if (hasTable(db, groupTable)) {
-      const rows = queryAll<GroupNode>(
-        db,
-        `SELECT DISTINCT KNOTEN_ID as id, KNOTEN_KZ as code, KNOTEN_BEZ as name, VATER_ID as parentId FROM ${groupTable} WHERE VATER_ID = ? ORDER BY KNOTEN_SORT, KNOTEN_ID;`,
-        [nodeId],
-      );
+      const rows = db
+        .prepare(
+          `SELECT DISTINCT KNOTEN_ID as id, KNOTEN_KZ as code, KNOTEN_BEZ as name, VATER_ID as parentId FROM ${groupTable} WHERE VATER_ID = ? ORDER BY KNOTEN_SORT, KNOTEN_ID`,
+        )
+        .all(nodeId) as GroupNode[];
 
       if (rows.length === 0) {
         res.status(404).json({ error: 'Group not found' });
@@ -456,11 +407,11 @@ const main = async () => {
       return;
     }
 
-    const rows = queryAll<GroupNode>(
-      db,
-      `SELECT DISTINCT z.KNOTEN_ID as id, z.KNOTEN_KZ as code, z.KNOTEN_BEZ as name, z.VATER_ID as parentId FROM ${fallbackTable} z WHERE z.VATER_ID = ? ORDER BY z.KNOTEN_SORT, z.KNOTEN_ID;`,
-      [nodeId],
-    );
+    const rows = db
+      .prepare(
+        `SELECT DISTINCT z.KNOTEN_ID as id, z.KNOTEN_KZ as code, z.KNOTEN_BEZ as name, z.VATER_ID as parentId FROM ${fallbackTable} z WHERE z.VATER_ID = ? ORDER BY z.KNOTEN_SORT, z.KNOTEN_ID`,
+      )
+      .all(nodeId) as GroupNode[];
 
     if (rows.length === 0) {
       res.status(404).json({ error: 'Group not found' });
@@ -487,11 +438,11 @@ const main = async () => {
         continue;
       }
 
-      const rows = queryAll<DocumentListItem>(
-        db,
-        `SELECT o.INFOOBJ_ID as id, o.INFOOBJ_KZ as code, o.DOKART_ID as dokartId, o.TITEL as title, o.ERSCHDAT as publicationDate FROM ${tgrrTable} g JOIN TINFO_OBJEKT o ON g.INFOOBJ_ID = o.INFOOBJ_ID WHERE g.KNOTEN_ID = ? ORDER BY o.TITEL;`,
-        [nodeId],
-      );
+      const rows = db
+        .prepare(
+          `SELECT o.INFOOBJ_ID as id, o.INFOOBJ_KZ as code, o.DOKART_ID as dokartId, o.TITEL as title, o.ERSCHDAT as publicationDate FROM ${tgrrTable} g JOIN TINFO_OBJEKT o ON g.INFOOBJ_ID = o.INFOOBJ_ID WHERE g.KNOTEN_ID = ? ORDER BY o.TITEL`,
+        )
+        .all(nodeId) as DocumentListItem[];
 
       results.push(...rows);
     }
@@ -511,25 +462,27 @@ const main = async () => {
       return;
     }
 
-    const document = queryGet<DocumentDetail>(
-      db,
-      'SELECT INFOOBJ_ID as id, INFOOBJ_KZ as code, DOKART_ID as dokartId, TITEL as title, ERSCHDAT as publicationDate, SECURITY as security FROM TINFO_OBJEKT WHERE INFOOBJ_ID = ?;',
-      [documentId],
-    );
+    const document = db
+      .prepare(
+        'SELECT INFOOBJ_ID as id, INFOOBJ_KZ as code, DOKART_ID as dokartId, TITEL as title, ERSCHDAT as publicationDate, SECURITY as security FROM TINFO_OBJEKT WHERE INFOOBJ_ID = ?',
+      )
+      .get(documentId) as DocumentDetail | undefined;
 
     if (!document) {
       res.status(404).json({ error: 'Document not found' });
       return;
     }
 
-    const files = queryAll<{
-      filename: string;
-      deviceType: string | null;
-      deviceCode: string | null;
-    }>(
-      db,
-      'SELECT INFO_FILENAME as filename, DEVICETYP as deviceType, DEVICEKZ as deviceCode FROM TINFO_FILE WHERE INFOOBJ_ID = ?;',
-      [documentId],
+    const files = (
+      db
+        .prepare(
+          'SELECT INFO_FILENAME as filename, DEVICETYP as deviceType, DEVICEKZ as deviceCode FROM TINFO_FILE WHERE INFOOBJ_ID = ?',
+        )
+        .all(documentId) as Array<{
+        filename: string;
+        deviceType: string | null;
+        deviceCode: string | null;
+      }>
     ).map((file) => ({
       ...file,
       graphicsPath: `GRAFIK/${file.filename}.ITW`,
@@ -559,16 +512,12 @@ const main = async () => {
   app.listen(port, () => {
     // eslint-disable-next-line no-console
     console.log(`Server listening on port ${port}`);
-    console.log(`SQLite database: ${dbPath}`);
-    console.log(`Docs database: ${docsDbPath}`);
-    console.log(`Images database: ${imagesDbPath}`);
+    console.log(`Database: ${dbPath}`);
   });
 
-  process.on('SIGINT', () => {
-    db.close();
-    docsDb.close();
-    process.exit(0);
-  });
+  process.on('exit', () => db.close());
+  process.on('SIGINT', () => process.exit(128 + 2));
+  process.on('SIGTERM', () => process.exit(128 + 15));
 };
 
 main().catch((error) => {

@@ -31,8 +31,8 @@ RUN pnpm build
 # ============================================
 FROM node:22-alpine AS production
 
-# Install pandoc for markdown conversion
-RUN apk add --no-cache pandoc
+# Install pandoc for RTF conversion and build tools for better-sqlite3 native module
+RUN apk add --no-cache pandoc python3 make g++
 
 WORKDIR /app
 
@@ -54,7 +54,6 @@ RUN mkdir -p /data
 ENV NODE_ENV=production
 ENV PORT=3000
 ENV TIS_DB_PATH=/data/tis.sqlite
-ENV DOCS_DB_PATH=/data/docs.sqlite
 
 EXPOSE 3000
 
