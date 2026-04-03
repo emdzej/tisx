@@ -1,0 +1,63 @@
+# syntax=docker/dockerfile:1
+
+# ============================================
+# TIS Data Preparation Container
+# ============================================
+# Extracts and converts original BMW TIS disc data into SQLite databases.
+#
+# Usage:
+#   docker build -f Dockerfile.prepare -t tisx-prepare .
+#   docker run --rm \
+#     -v /path/to/tis-disc:/source:ro \
+#     -v /path/to/output:/dest \
+#     tisx-prepare
+#
+# Source directory should be the root of the TIS disc/image containing:
+#   DATA/DB.Z   - InstallShield V3 archive with the MDB database
+#   GRAFIK/     - ITW image files
+#   DOCS/       - Compressed RTF documentation files
+
+# ── Stage 1: Build unshieldv3 from source ────────────────────────────────────
+# Originally by Wolfgang Frisch (https://github.com/wfr/unshieldv3).
+# Using our fork to ensure long-term availability of the source.
+FROM alpine:3.21 AS unshieldv3-builder
+
+RUN apk add --no-cache gcc g++ cmake make git
+
+RUN git clone --depth 1 https://github.com/emdzej/unshieldv3.git /src/unshieldv3
+
+WORKDIR /src/unshieldv3/build
+RUN cmake .. && make
+
+# ── Stage 2: Data preparation image ─────────────────────────────────────────
+FROM node:22-alpine
+
+RUN apk add --no-cache \
+    mdbtools \
+    mdbtools-utils \
+    sqlite \
+    gzip \
+    bash \
+    findutils \
+    coreutils
+
+# Install ITW image decoder
+RUN npm install -g @emdzej/itw-decoder@0.2.0
+
+# Copy unshieldv3 binary from builder
+COPY --from=unshieldv3-builder /src/unshieldv3/build/unshieldv3 /usr/local/bin/unshieldv3
+
+# Copy pipeline scripts
+COPY scripts/mdb-to-sqlite.sh          /scripts/mdb-to-sqlite.sh
+COPY scripts/convert-grafik.sh         /scripts/convert-grafik.sh
+COPY scripts/import-images-to-sqlite.sh /scripts/import-images-to-sqlite.sh
+COPY scripts/decompress-tis-docs.sh    /scripts/decompress-tis-docs.sh
+COPY scripts/create-rtf-docs-db.sh     /scripts/create-rtf-docs-db.sh
+
+RUN chmod +x /scripts/*.sh
+
+# Copy entrypoint
+COPY scripts/prepare-data.sh /scripts/prepare-data.sh
+RUN chmod +x /scripts/prepare-data.sh
+
+ENTRYPOINT ["/scripts/prepare-data.sh"]

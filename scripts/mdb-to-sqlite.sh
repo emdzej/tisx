@@ -1,6 +1,10 @@
 #!/bin/bash
 # Convert MDB (Microsoft Access) to SQLite
 # Usage: ./mdb-to-sqlite.sh /path/to/database.mdb [output.sqlite]
+#
+# If the output file already exists, MDB tables are added to it (existing
+# tables are left untouched).  This allows other scripts to add their own
+# tables to the same database.
 
 set -e
 
@@ -30,19 +34,17 @@ if [[ ! -f "$MDB_FILE" ]]; then
     exit 1
 fi
 
-# Remove existing sqlite file
-if [[ -f "$SQLITE_FILE" ]]; then
-    echo "Removing existing $SQLITE_FILE"
-    rm -f "$SQLITE_FILE"
-fi
-
 echo "Converting: $MDB_FILE"
 echo "Output:     $SQLITE_FILE"
 echo ""
 
-# Create schema
+# Create schema (IF NOT EXISTS makes this safe for existing databases)
 echo "Creating schema..."
-mdb-schema "$MDB_FILE" sqlite | sqlite3 "$SQLITE_FILE"
+mdb-schema "$MDB_FILE" sqlite \
+    | sed 's/CREATE TABLE/CREATE TABLE IF NOT EXISTS/g' \
+    | sed 's/CREATE INDEX/CREATE INDEX IF NOT EXISTS/g' \
+    | sed 's/CREATE UNIQUE INDEX/CREATE UNIQUE INDEX IF NOT EXISTS/g' \
+    | sqlite3 "$SQLITE_FILE"
 
 # Get all tables
 tables=$(mdb-tables -1 "$MDB_FILE")
@@ -52,7 +54,7 @@ count=0
 echo "Exporting $total tables..."
 
 for table in $tables; do
-    ((count++))
+    (( count++ )) || true
     printf "  [%d/%d] %s... " "$count" "$total" "$table"
     
     # Export table data as INSERT statements and import to sqlite

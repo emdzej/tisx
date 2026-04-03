@@ -3,10 +3,11 @@
 # Usage: ./import-images-to-sqlite.sh <image_dir> <db_file>
 #
 # Table schema:
-#   CREATE TABLE images (
-#     id           TEXT PRIMARY KEY,   -- relative path, e.g. "1/03/95/26.png"
+#   CREATE TABLE IMAGES (
+#     id           TEXT PRIMARY KEY,   -- relative path uppercased, e.g. "1/03/95/26.PNG"
+#     path         TEXT NOT NULL,      -- directory portion, e.g. "1/03/95"
 #     content_type TEXT NOT NULL,      -- MIME type, e.g. "image/png"
-#     data         BLOB NOT NULL       -- raw image bytes; PRIMARY KEY implicitly indexed
+#     data         BLOB NOT NULL       -- raw image bytes
 #   );
 
 set -euo pipefail
@@ -33,11 +34,13 @@ echo "DB     : $DB_FILE"
 echo ""
 
 sqlite3 "$DB_FILE" <<'SQL'
-CREATE TABLE IF NOT EXISTS images (
+CREATE TABLE IF NOT EXISTS IMAGES (
     id           TEXT PRIMARY KEY,
+    path         TEXT NOT NULL,
     content_type TEXT NOT NULL,
     data         BLOB NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_images_path ON IMAGES(path);
 SQL
 
 # ── Count total for progress indicator ───────────────────────────────────────
@@ -87,14 +90,21 @@ flush_batch() {
 
 while IFS= read -r -d '' img_file; do
     rel_id="${img_file#$IMAGE_DIR/}"
+    rel_id_upper=$(echo "$rel_id" | tr '[:lower:]' '[:upper:]')
+
+    dir_path=$(dirname "$rel_id_upper")
+    if [[ "$dir_path" == "." ]]; then
+        dir_path=""
+    fi
 
     # Escape single quotes in path (e.g. apostrophes in filenames)
-    safe_id="${rel_id//"'"/"''"}"
+    safe_id="${rel_id_upper//"'"/"''"}"
+    safe_dir="${dir_path//"'"/"''"}"
     safe_path="${img_file//"'"/"''"}"
     ctype="$(mime_type "$img_file")"
 
-    printf "INSERT OR IGNORE INTO images(id, content_type, data) VALUES('%s', '%s', readfile('%s'));\n" \
-        "$safe_id" "$ctype" "$safe_path" >> "$tmp_sql"
+    printf "INSERT OR IGNORE INTO IMAGES(id, path, content_type, data) VALUES('%s', '%s', '%s', readfile('%s'));\n" \
+        "$safe_id" "$safe_dir" "$ctype" "$safe_path" >> "$tmp_sql"
 
     (( batch_count++ )) || true
 
@@ -109,7 +119,7 @@ echo "  Progress: $total_written / $total"
 
 # ── Final stats ───────────────────────────────────────────────────────────────
 
-db_count=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM images;")
+db_count=$(sqlite3 "$DB_FILE" "SELECT COUNT(*) FROM IMAGES;")
 db_size=$(du -sh "$DB_FILE" | cut -f1)
 
 echo ""

@@ -1,0 +1,28 @@
+# Lightweight extraction container — pulls images and/or docs out of tis.sqlite
+# Usage:
+#   docker build -f Dockerfile.extract -t tisx-extract .
+#
+#   # Bulk extract:
+#   docker run --rm \
+#     -v /path/to/tis.sqlite:/data/tis.sqlite:ro \
+#     -v /path/to/output:/output \
+#     tisx-extract <images|docs|both>
+#
+#   # Single item by ID:
+#   docker run --rm \
+#     -v /path/to/tis.sqlite:/data/tis.sqlite:ro \
+#     -v /path/to/output:/output \
+#     tisx-extract images /data/tis.sqlite /output 26.PNG
+
+FROM alpine:3.21
+
+RUN apk add --no-cache sqlite bash findutils coreutils
+
+COPY scripts/extract-images-from-sqlite.sh /scripts/extract-images-from-sqlite.sh
+COPY scripts/extract-docs-from-sqlite.sh   /scripts/extract-docs-from-sqlite.sh
+COPY scripts/extract-data.sh               /scripts/extract-data.sh
+RUN chmod +x /scripts/*.sh
+
+ENTRYPOINT ["/scripts/extract-data.sh"]
+# Default: extract both images and docs
+CMD ["both", "/data/tis.sqlite", "/output"]
