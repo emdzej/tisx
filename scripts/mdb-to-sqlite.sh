@@ -58,7 +58,9 @@ for table in $tables; do
     printf "  [%d/%d] %s... " "$count" "$total" "$table"
     
     # Export table data as INSERT statements and import to sqlite
-    mdb-export -I sqlite "$MDB_FILE" "$table" | sqlite3 "$SQLITE_FILE" 2>/dev/null || true
+    if ! mdb-export -I sqlite "$MDB_FILE" "$table" | sqlite3 "$SQLITE_FILE"; then
+        echo "WARNING: errors during export of $table" >&2
+    fi
     
     # Get row count
     rows=$(sqlite3 "$SQLITE_FILE" "SELECT COUNT(*) FROM \"$table\"" 2>/dev/null || echo "0")

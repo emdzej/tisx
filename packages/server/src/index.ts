@@ -165,8 +165,8 @@ const rtfToHtml = (
 const main = async () => {
   const db = new Database(dbPath, { readonly: true, fileMustExist: true });
 
-  // Enable WAL mode for better concurrent read performance (no-op on readonly, but harmless)
-  db.pragma('journal_mode = WAL');
+  // Memory-map the file for faster reads (256 MB window)
+  db.pragma('mmap_size = 268435456');
 
   const app = express();
   app.use(cors());

@@ -20,9 +20,11 @@
 # ── Stage 1: Build unshieldv3 from source ────────────────────────────────────
 # Originally by Wolfgang Frisch (https://github.com/wfr/unshieldv3).
 # Using our fork to ensure long-term availability of the source.
-FROM alpine:3.21 AS unshieldv3-builder
+FROM debian:bookworm-slim AS unshieldv3-builder
 
-RUN apk add --no-cache gcc g++ cmake make git
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc g++ cmake make git ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 RUN git clone --depth 1 https://github.com/emdzej/unshieldv3.git /src/unshieldv3
 
@@ -30,16 +32,15 @@ WORKDIR /src/unshieldv3/build
 RUN cmake .. && make
 
 # ── Stage 2: Data preparation image ─────────────────────────────────────────
-FROM node:22-alpine
+FROM node:22-slim
 
-RUN apk add --no-cache \
+RUN apt-get update && apt-get install -y --no-install-recommends \
     mdbtools \
-    mdbtools-utils \
-    sqlite \
+    sqlite3 \
     gzip \
-    bash \
     findutils \
-    coreutils
+    coreutils \
+    && rm -rf /var/lib/apt/lists/*
 
 # Install ITW image decoder
 RUN npm install -g @emdzej/itw-decoder@0.2.0
