@@ -179,6 +179,14 @@ The monorepo contains two packages:
 
 ITW image format decoding (used internally by TIS for graphics) is handled by a separate project: [itw-decoder](https://github.com/emdzej/itw-decoder).
 
+## Legal Notice
+
+**This project does not include any BMW copyrighted data.**
+
+The original TIS (Technical Information System) contents — including service manuals, repair instructions, wiring diagrams, technical documents, and images — are the intellectual property of BMW AG and are protected by copyright.
+
+To use this application, you must obtain your own legitimate copy of the original TIS data. This project provides only the tools to convert, serve, and browse that data — it does not distribute the data itself.
+
 ## Right to Repair
 
 The [Right to Repair](https://repair.eu) movement advocates for consumers' ability to fix the products they own -- from electronics to vehicles -- without being locked out by manufacturers through proprietary tools, paywalled documentation, or artificial restrictions.
