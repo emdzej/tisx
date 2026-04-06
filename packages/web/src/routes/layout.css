@@ -2,3 +2,41 @@
 @plugin '@tailwindcss/typography';
 
 @custom-variant dark (&:where(.dark, .dark *));
+
+@media print {
+	/* Hide app chrome — only the document article prints */
+	header,
+	nav,
+	.print\\:hidden {
+		display: none !important;
+	}
+
+	/* Let the content flow naturally for print */
+	main {
+		overflow: visible !important;
+		max-width: none !important;
+		padding: 0 !important;
+		height: auto !important;
+	}
+
+	/* Remove decorative borders/bg from the article card */
+	article {
+		border: none !important;
+		border-radius: 0 !important;
+		padding: 0 !important;
+		box-shadow: none !important;
+		background: white !important;
+		color: black !important;
+	}
+
+	/* Ensure images fit the page */
+	img.tis-inline-image {
+		max-width: 100% !important;
+		page-break-inside: avoid;
+	}
+
+	/* Avoid page breaks inside table rows */
+	tr {
+		page-break-inside: avoid;
+	}
+}
