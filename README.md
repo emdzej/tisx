@@ -1,10 +1,35 @@
-# tisx - BMW TIS Web App
+# TISX
 
-A self-deployable web application that reimplements the BMW Technical Information System (TIS) — allowing you to browse service manuals, repair instructions, and technical documents by vehicle series, model, and engine.
+A self-deployable web application that reimplements the BMW Technical Information System (TIS). Browse service manuals, repair instructions, wiring diagrams, and technical documents by vehicle series, model, and engine -- all from a modern web interface you can host yourself.
 
-## Overview
+The original TIS was a Windows desktop application distributed on CD/DVD, backed by a Microsoft Access database. TISX converts that data into a single SQLite file and serves it through an Express API and SvelteKit frontend, preserving the full document hierarchy, cross-reference system, and image assets from the original.
 
-The original TIS was a Windows desktop application distributed on CD/DVD. This project provides the same functionality as a modern web app you can host yourself, backed by the original TIS SQLite databases.
+## Features
+
+- **Document browser** -- cascading navigation through document types, main groups, and sub groups with inline search/filtering at every level
+- **Vehicle selection** -- choose series, model, and engine to filter documents to your specific vehicle; variant-aware filtering across engine, body, and gearbox dimensions
+- **VIN lookup** -- decode a chassis number to automatically resolve series, model, engine, body, gearbox, drive type, and production date
+- **Symptom-based navigation** -- browse documents by condition and component through the original TIS complaint tree
+- **RTF document rendering** -- server-side conversion of original TIS RTF documents (with BMW-specific extensions) to HTML, including embedded images and cross-reference hotspot links
+- **Cross-reference hotspots** -- clickable links within documents that navigate to related documents, with disambiguation when multiple targets exist
+- **Favourites** -- bookmark vehicles and documents with optional labels; persisted to local storage with JSON export/import
+- **Dark mode** -- light and dark themes with system preference detection
+- **Docker deployment** -- multi-stage Docker build with health checks; single `docker compose up` to run
+- **Data pipeline** -- automated conversion of original TIS disc contents (InstallShield archive, MDB database, ITW images, compressed RTF docs) into a single portable SQLite database
+- **Data extraction** -- extract images and/or documents back out of the database to files on disk
+
+## Documentation
+
+Detailed technical documentation is available in the [`docs/`](docs/) directory:
+
+| Document | Description |
+|----------|-------------|
+| [Navigation System](docs/navigation-system.md) | Architecture of the document and symptom-based navigation, entry paths, and group hierarchy |
+| [RTF System](docs/rtf-system.md) | RTF rendering pipeline, BMW-specific RTF extensions, hotspot cross-references, and image embedding |
+| [Database Schema](docs/tis-database-schema.md) | Original TIS database schema (tables, columns, relationships) |
+| [Database Tables](docs/database-tables.md) | Detailed column-level reference for every table with English translations |
+| [Database Diagram](docs/database-diagram.md) | Entity-relationship diagram (Mermaid) |
+| [Database Queries](docs/database-queries.md) | SQL queries extracted from the original `tis.exe` binary via Ghidra decompilation |
 
 ## Prerequisites
 
@@ -35,12 +60,12 @@ docker run --rm \
   tisx-prepare /source /dest
 ```
 
-- `/path/to/tis-disc` — root of the original TIS disc (must contain `DATA/`, `GRAFIK/`, `DOCS/`)
-- `/path/to/output` — directory where `tis.sqlite` will be written
+- `/path/to/tis-disc` -- root of the original TIS disc (must contain `DATA/`, `GRAFIK/`, `DOCS/`)
+- `/path/to/output` -- directory where `tis.sqlite` will be written
 
 This produces a single `tis.sqlite` database containing all TIS tables, images (`IMAGES` table), and documents (`DOCS` table).
 
-Images and docs are stored as BLOBs in the database rather than as individual files — copying one database file is significantly faster than transferring tens of thousands of small files, and eliminates filesystem overhead when deploying.
+Images and docs are stored as BLOBs in the database rather than as individual files -- copying one database file is significantly faster than transferring tens of thousands of small files, and eliminates filesystem overhead when deploying.
 
 ## Data extraction
 
@@ -136,13 +161,19 @@ pnpm install
 pnpm dev
 ```
 
-The monorepo contains three packages:
+The monorepo contains two packages:
 
 | Package | Description |
 |---------|-------------|
 | `packages/web` | SvelteKit frontend |
 | `packages/server` | Express API server |
-| `packages/cli` | CLI utilities |
+
+## Tech stack
+
+- **Frontend** -- SvelteKit 2, Svelte 5, Tailwind CSS 4
+- **Backend** -- Express, better-sqlite3
+- **Build** -- Turborepo, pnpm workspaces, Vite
+- **Infrastructure** -- Docker (multi-stage), Docker Compose
 
 ## Related
 
@@ -150,11 +181,11 @@ ITW image format decoding (used internally by TIS for graphics) is handled by a 
 
 ## Right to Repair
 
-The [Right to Repair](https://repair.eu) movement advocates for consumers' ability to fix the products they own — from electronics to vehicles — without being locked out by manufacturers through proprietary tools, paywalled documentation, or artificial restrictions.
+The [Right to Repair](https://repair.eu) movement advocates for consumers' ability to fix the products they own -- from electronics to vehicles -- without being locked out by manufacturers through proprietary tools, paywalled documentation, or artificial restrictions.
 
 **I build these tools because I believe repair is a fundamental right, not a privilege.**
 
-Too often, service manuals, diagnostic software, and technical documentation are kept behind closed doors — unavailable to individuals even when they're willing to pay. This wasn't always the case. Products once shipped with schematics and repair guides as standard. The increasing complexity of modern technology doesn't change the fact that capable people exist who can — and should be allowed to — use that information.
+Too often, service manuals, diagnostic software, and technical documentation are kept behind closed doors -- unavailable to individuals even when they're willing to pay. This wasn't always the case. Products once shipped with schematics and repair guides as standard. The increasing complexity of modern technology doesn't change the fact that capable people exist who can -- and should be allowed to -- use that information.
 
 These projects exist to preserve access to technical knowledge and ensure that owners aren't left at the mercy of vendors who may discontinue support, charge prohibitive fees, or simply refuse service.
 
