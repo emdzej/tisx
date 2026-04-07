@@ -85,3 +85,80 @@ export interface SymptomNode {
 export interface ErrorResponse {
   error: string;
 }
+
+/** Parameters for vehicle-scoped queries */
+export interface VehicleFilter {
+  seriesId: number | null;
+  modelId: number | null;
+  engineId: number | null;
+  bodyIds: number[];
+  gearboxIds: number[];
+}
+
+/** Result of vehicle variant resolution */
+export interface VehicleVariants {
+  bodyIds: number[];
+  gearboxIds: number[];
+  driveIds: number[];
+  bodyNames: string[];
+  gearboxNames: string[];
+  driveNames: string[];
+  modelYear: string | null;
+}
+
+/** VIN lookup result */
+export interface VinResult {
+  seriesId: number;
+  seriesName: string | null;
+  modelId: number;
+  modelName: string | null;
+  engineId: number;
+  engineName: string | null;
+  bodyId: number;
+  bodyName: string | null;
+  gearboxId: number;
+  gearboxName: string | null;
+  driveId: number;
+  driveName: string | null;
+  productionDate: number | null;
+}
+
+/** RTF text placeholder substitution map */
+export interface TextPlaceholders {
+  '--TYP--': string;
+  '--FGSTNR--': string;
+  '--MODELL--': string;
+  '--MOTOR--': string;
+  '--KAROSS--': string;
+  [key: string]: string;
+}
+
+/** Related document with doc type info */
+export interface RelatedDocument {
+  id: number;
+  code: string | null;
+  docTypeId: number;
+  title: string;
+  publicationDate: number | null;
+  docTypeCode: string;
+  docTypeName: string;
+}
+
+/** Hotspot target document */
+export interface HotspotTarget {
+  id: number;
+  code: string | null;
+  docTypeId: number;
+  title: string;
+}
+
+/** Hotspot map: hotspotNr → target documents */
+export type HotspotMap = Record<number, HotspotTarget[]>;
+
+/** Document lookup by code result */
+export interface DocumentCodeResult {
+  id: number;
+  code: string;
+  docTypeId: number;
+  title: string;
+}
