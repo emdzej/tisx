@@ -89,6 +89,105 @@ export const getSymptomNodes = (
 };
 
 /**
+ * Returns ALL nodes in a symptom tree under a given root (e.g. -1 or -2)
+ * in a single query. Each node includes its parentId so the client can
+ * build the full tree structure. Optionally filtered by vehicle.
+ */
+export const getSymptomTree = (
+  db: Database.Database,
+  rootId: number,
+  seriesId: number | null,
+  modelId: number | null,
+  engineId: number | null,
+): SymptomNode[] => {
+  const hasVehicle = seriesId !== null;
+
+  let sql: string;
+  const params: number[] = [];
+
+  if (hasVehicle) {
+    const vehicleWhere: string[] = [];
+
+    params.push(rootId);
+
+    vehicleWhere.push('k.BAUREIHE_ID = ?');
+    params.push(seriesId!);
+    if (modelId !== null) {
+      vehicleWhere.push('k.MODELL_ID = ?');
+      params.push(modelId);
+    }
+    if (engineId !== null) {
+      vehicleWhere.push('k.MOTOR_ID = ?');
+      params.push(engineId);
+    }
+
+    sql = `
+      WITH RECURSIVE tree AS (
+        SELECT t.KNOTEN_ID, t.KNOTEN_KZ, t.KNOTEN_BEZ, t.VATER_ID, t.KNOTEN_SORT
+        FROM tzuwegknoten t
+        JOIN TKN_SY_REF k ON k.ZUWEG_ID = 1 AND k.KNOTEN_ID = t.KNOTEN_ID
+        WHERE t.ZUWEG_ID = 1 AND t.VATER_ID = ? AND t.LAND_OK = 1
+          AND ${vehicleWhere.join(' AND ')}
+
+        UNION
+
+        SELECT c.KNOTEN_ID, c.KNOTEN_KZ, c.KNOTEN_BEZ, c.VATER_ID, c.KNOTEN_SORT
+        FROM tzuwegknoten c
+        JOIN tree p ON c.VATER_ID = p.KNOTEN_ID
+        JOIN TKN_SY_REF k2 ON k2.ZUWEG_ID = 1 AND k2.KNOTEN_ID = c.KNOTEN_ID
+        WHERE c.ZUWEG_ID = 1 AND c.LAND_OK = 1
+          AND ${vehicleWhere.map((w) => w.replace('k.', 'k2.')).join(' AND ')}
+      )
+      SELECT DISTINCT
+        tree.KNOTEN_ID as id, tree.KNOTEN_KZ as code, tree.KNOTEN_BEZ as name,
+        tree.VATER_ID as parentId,
+        CASE WHEN EXISTS (
+          SELECT 1 FROM tzuwegknoten ch
+          WHERE ch.ZUWEG_ID = 1 AND ch.VATER_ID = tree.KNOTEN_ID AND ch.LAND_OK = 1
+        ) THEN 1 ELSE 0 END as hasChildren
+      FROM tree
+      ORDER BY tree.KNOTEN_SORT, tree.KNOTEN_ID
+    `;
+
+    // The recursive CTE re-uses vehicle params for both base and recursive cases
+    // We need to duplicate the vehicle params for the recursive part
+    const vehicleParams = params.slice(1); // skip rootId
+    params.push(...vehicleParams);
+  } else {
+    sql = `
+      WITH RECURSIVE tree AS (
+        SELECT t.KNOTEN_ID, t.KNOTEN_KZ, t.KNOTEN_BEZ, t.VATER_ID, t.KNOTEN_SORT
+        FROM tzuwegknoten t
+        WHERE t.ZUWEG_ID = 1 AND t.VATER_ID = ? AND t.LAND_OK = 1
+
+        UNION
+
+        SELECT c.KNOTEN_ID, c.KNOTEN_KZ, c.KNOTEN_BEZ, c.VATER_ID, c.KNOTEN_SORT
+        FROM tzuwegknoten c
+        JOIN tree p ON c.VATER_ID = p.KNOTEN_ID
+        WHERE c.ZUWEG_ID = 1 AND c.LAND_OK = 1
+      )
+      SELECT DISTINCT
+        tree.KNOTEN_ID as id, tree.KNOTEN_KZ as code, tree.KNOTEN_BEZ as name,
+        tree.VATER_ID as parentId,
+        CASE WHEN EXISTS (
+          SELECT 1 FROM tzuwegknoten ch
+          WHERE ch.ZUWEG_ID = 1 AND ch.VATER_ID = tree.KNOTEN_ID AND ch.LAND_OK = 1
+        ) THEN 1 ELSE 0 END as hasChildren
+      FROM tree
+      ORDER BY tree.KNOTEN_SORT, tree.KNOTEN_ID
+    `;
+    params.push(rootId);
+  }
+
+  const rows = db.prepare(sql).all(...params) as SymptomNode[];
+  for (const row of rows) {
+    row.hasChildren = Boolean(row.hasChildren);
+  }
+  return rows;
+};
+
+/**
  * Returns documents associated with a symptom tree node via TSYREFALL.
  */
 export const getSymptomDocuments = (

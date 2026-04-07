@@ -20,24 +20,40 @@ import { decodeContent } from '../utils.js';
 // DocType helpers
 // ---------------------------------------------------------------------------
 
+/** Derive the fixed alphabetic code prefix for a doc type.
+ *  ISB (id 1600) codes start with "IB"; all others are purely numeric. */
+const deriveCodePrefix = (dt: Omit<DocType, 'codePrefix'>): string => {
+  if (dt.id === 1600) return 'IB';
+  return '';
+};
+
+/** Hydrate keyLength, minLength, codePrefix on a raw doc-type row. */
+const hydrateDocType = (
+  row: Omit<DocType, 'codePrefix'> & { keyLength: number; minLength: number },
+): DocType => ({
+  ...row,
+  codePrefix: deriveCodePrefix(row),
+});
+
 export const getDocType = (
   db: Database.Database,
   docTypeId: number,
 ): DocType | null => {
   const row = db
     .prepare(
-      'SELECT DOKART_ID as id, DOKART_KZ as code, DOKART_BEZ as name, HGNAME as mainGroupLabel, UGNAME as subGroupLabel, METHODE as methode, ZUGRIFF as zugriff, FZG_REQU as fzgRequ FROM TDOKART WHERE DOKART_ID = ?',
+      'SELECT DOKART_ID as id, DOKART_KZ as code, DOKART_BEZ as name, HGNAME as mainGroupLabel, UGNAME as subGroupLabel, METHODE as methode, ZUGRIFF as zugriff, FZG_REQU as fzgRequ, KEY_LENGTH as keyLength, MIN_LENGTH as minLength FROM TDOKART WHERE DOKART_ID = ?',
     )
-    .get(docTypeId) as DocType | undefined;
-  return row ?? null;
+    .get(docTypeId) as (Omit<DocType, 'codePrefix'> & { keyLength: number; minLength: number }) | undefined;
+  return row ? hydrateDocType(row) : null;
 };
 
 export const getDocTypes = (db: Database.Database): DocType[] => {
-  return db
+  const rows = db
     .prepare(
-      "SELECT DOKART_ID as id, DOKART_KZ as code, DOKART_BEZ as name, HGNAME as mainGroupLabel, UGNAME as subGroupLabel, METHODE as methode, ZUGRIFF as zugriff, FZG_REQU as fzgRequ FROM TDOKART WHERE LAND_OK = 1 ORDER BY DOKART_SORT",
+      "SELECT DOKART_ID as id, DOKART_KZ as code, DOKART_BEZ as name, HGNAME as mainGroupLabel, UGNAME as subGroupLabel, METHODE as methode, ZUGRIFF as zugriff, FZG_REQU as fzgRequ, KEY_LENGTH as keyLength, MIN_LENGTH as minLength FROM TDOKART WHERE LAND_OK = 1 ORDER BY DOKART_SORT",
     )
-    .all() as DocType[];
+    .all() as (Omit<DocType, 'codePrefix'> & { keyLength: number; minLength: number })[];
+  return rows.map(hydrateDocType);
 };
 
 // ---------------------------------------------------------------------------
@@ -458,6 +474,63 @@ export const getDocumentByCode = (
        FROM TINFO_OBJEKT WHERE INFOOBJ_KZ = ? AND LAND_OK = 1`,
     )
     .all(code) as DocumentCodeResult[];
+};
+
+/**
+ * Look up document(s) by INFOOBJ_KZ code scoped to a specific doc type.
+ * Used for the document code search feature.
+ */
+export const getDocumentByCodeAndType = (
+  db: Database.Database,
+  code: string,
+  docTypeId: number,
+  seriesId: number | null,
+  modelId: number | null,
+  engineId: number | null,
+): DocumentCodeResult[] => {
+  const hasVehicle = seriesId !== null;
+
+  if (hasVehicle) {
+    const vehicleWhere: string[] = [];
+    const vehicleParams: (number | null)[] = [];
+    if (seriesId !== null) {
+      vehicleWhere.push('f.BAUREIHE_ID = ?');
+      vehicleParams.push(seriesId);
+    }
+    if (modelId !== null) {
+      vehicleWhere.push('f.MODELL_ID = ?');
+      vehicleParams.push(modelId);
+    }
+    if (engineId !== null) {
+      vehicleWhere.push('f.MOTOR_ID = ?');
+      vehicleParams.push(engineId);
+    }
+    const vehicleFilter =
+      vehicleWhere.length > 0 ? ` AND ${vehicleWhere.join(' AND ')}` : '';
+
+    return db
+      .prepare(
+        `SELECT DISTINCT o.INFOOBJ_ID as id, o.INFOOBJ_KZ as code, o.DOKART_ID as docTypeId, o.TITEL as title
+         FROM TINFO_OBJEKT o
+         JOIN TFZGREFBR f ON f.INFOOBJ_ID = o.INFOOBJ_ID
+         WHERE o.INFOOBJ_KZ = ? AND o.DOKART_ID = ? AND o.LAND_OK = 1${vehicleFilter}
+
+         UNION
+
+         SELECT DISTINCT o.INFOOBJ_ID as id, o.INFOOBJ_KZ as code, o.DOKART_ID as docTypeId, o.TITEL as title
+         FROM TINFO_OBJEKT o
+         JOIN TFZGREFBR f ON f.INFOOBJ_ID = o.INFOOBJ_ID
+         WHERE o.INFOOBJ_KZ = ? AND o.DOKART_ID = ? AND o.LAND_OK = 1 AND f.BAUREIHE_ID = 0`,
+      )
+      .all(code, docTypeId, ...vehicleParams, code, docTypeId) as DocumentCodeResult[];
+  }
+
+  return db
+    .prepare(
+      `SELECT INFOOBJ_ID as id, INFOOBJ_KZ as code, DOKART_ID as docTypeId, TITEL as title
+       FROM TINFO_OBJEKT WHERE INFOOBJ_KZ = ? AND DOKART_ID = ? AND LAND_OK = 1`,
+    )
+    .all(code, docTypeId) as DocumentCodeResult[];
 };
 
 // ---------------------------------------------------------------------------

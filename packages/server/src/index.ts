@@ -19,12 +19,14 @@ import {
   getDocumentsByDocType,
   getDocument,
   getDocumentByCode,
+  getDocumentByCodeAndType,
   getRelatedDocuments,
   getHotspots,
   getDocContent,
   getDocContentAsHtml,
   getSymptomRoots,
   getSymptomNodes,
+  getSymptomTree,
   getSymptomDocuments,
   getImage,
 } from '@emdzej/tisx-core';
@@ -311,6 +313,19 @@ const main = async () => {
     res.json(getSymptomNodes(db, parentId, seriesId, modelId, engineId));
   });
 
+  app.get('/api/symptoms/tree/:rootId', (req, res) => {
+    const rootId = parseId(req.params.rootId);
+    if (rootId === null) {
+      res.status(400).json({ error: 'Invalid root id' });
+      return;
+    }
+    const seriesId = parseId(req.query.series as string);
+    const modelId = parseId(req.query.model as string);
+    const engineId = parseId(req.query.engine as string);
+
+    res.json(getSymptomTree(db, rootId, seriesId, modelId, engineId));
+  });
+
   app.get('/api/symptoms/documents/:nodeId', (req, res) => {
     const nodeId = parseId(req.params.nodeId);
     if (nodeId === null) {
@@ -328,9 +343,39 @@ const main = async () => {
   // Single document, cross-references, hotspots
   // -------------------------------------------------------------------------
 
+  app.get('/api/doctypes/:docTypeId/documents/by-code/:code', (req, res) => {
+    const docTypeId = parseId(req.params.docTypeId);
+    if (docTypeId === null) {
+      res.status(400).json({ error: 'Invalid document type id' });
+      return;
+    }
+    const code = req.params.code?.trim();
+    if (!code || !/^[A-Za-z0-9]+$/.test(code)) {
+      res.status(400).json({ error: 'Invalid document code' });
+      return;
+    }
+    const seriesId = parseId(req.query.series as string);
+    const modelId = parseId(req.query.model as string);
+    const engineId = parseId(req.query.engine as string);
+
+    const rows = getDocumentByCodeAndType(
+      db,
+      code,
+      docTypeId,
+      seriesId,
+      modelId,
+      engineId,
+    );
+    if (rows.length === 0) {
+      res.status(404).json({ error: 'No document found with that code' });
+      return;
+    }
+    res.json(rows);
+  });
+
   app.get('/api/document/by-code/:code', (req, res) => {
     const code = req.params.code?.trim();
-    if (!code || !/^[\d.]+$/.test(code)) {
+    if (!code || !/^[A-Za-z0-9.]+$/.test(code)) {
       res.status(400).json({ error: 'Invalid document code' });
       return;
     }

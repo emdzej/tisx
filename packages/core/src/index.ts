@@ -63,6 +63,7 @@ export {
   getDocumentsByDocType,
   getDocument,
   getDocumentByCode,
+  getDocumentByCodeAndType,
   getRelatedDocuments,
   getHotspots,
   getDocContent,
@@ -73,6 +74,7 @@ export {
 export {
   getSymptomRoots,
   getSymptomNodes,
+  getSymptomTree,
   getSymptomDocuments,
 } from './services/symptoms.js';
 

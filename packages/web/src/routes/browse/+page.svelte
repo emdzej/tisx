@@ -14,6 +14,9 @@
 		methode: number;
 		zugriff: number;
 		fzgRequ: number;
+		keyLength: number;
+		minLength: number;
+		codePrefix: string;
 	};
 
 	type GroupNode = {
@@ -92,6 +95,11 @@
 	let subGroupSearch = $state('');
 	let documentSearch = $state('');
 
+	// --- Code search state ---
+	let codeSearchInput = $state('');
+	let codeSearchLoading = $state(false);
+	let codeSearchError = $state('');
+
 	// --- Derived filtered lists ---
 	let filteredMainGroups = $derived.by(() => {
 		if (!mainGroupSearch.trim()) return mainGroups;
@@ -144,6 +152,61 @@
 	}
 
 	const vehicleQuery = () => buildVehicleQuery($vehicle);
+
+	/** Code search: max digits the user can type (keyLength minus prefix length) */
+	let codeSearchMaxLen = $derived(
+		activeDocType ? activeDocType.keyLength - activeDocType.codePrefix.length : 0,
+	);
+
+	/** Whether the code input is valid for search */
+	let codeSearchValid = $derived.by(() => {
+		if (!activeDocType || activeDocType.keyLength === 0) return false;
+		const inputLen = codeSearchInput.length;
+		const prefixLen = activeDocType.codePrefix.length;
+		// Must have at least minLength total (including prefix)
+		return inputLen > 0 && inputLen + prefixLen >= activeDocType.minLength;
+	});
+
+	/** Perform code search: resolve code -> doc ID, then navigate */
+	const performCodeSearch = async () => {
+		if (!activeDocType || !codeSearchValid) return;
+		codeSearchLoading = true;
+		codeSearchError = '';
+		try {
+			const fullCode = activeDocType.codePrefix + codeSearchInput;
+			const vq = vehicleQuery();
+			const qChar = vq ? '&' : '?';
+			const url = `/api/doctypes/${activeDocType.id}/documents/by-code/${fullCode}${vq}`;
+			const results = await fetchJson<{ id: number; code: string; title: string }[]>(url);
+			if (results.length === 0) {
+				codeSearchError = 'No document found with that code.';
+				return;
+			}
+			goto(resolve(`/doc/${results[0].id}` as `/${string}`));
+		} catch (err: any) {
+			codeSearchError = err?.message ?? 'Search failed.';
+		} finally {
+			codeSearchLoading = false;
+		}
+	};
+
+	/** Handle keydown in code search input */
+	const onCodeSearchKeydown = (e: KeyboardEvent) => {
+		if (e.key === 'Enter' && codeSearchValid && !codeSearchLoading) {
+			performCodeSearch();
+		}
+	};
+
+	/** Filter code search input: only digits for numeric types, alphanumeric for others */
+	const onCodeSearchInput = (e: Event) => {
+		const input = e.currentTarget as HTMLInputElement;
+		// Allow only digits (all current non-prefix portions are numeric)
+		const cleaned = input.value.replace(/[^0-9]/g, '');
+		const truncated = cleaned.slice(0, codeSearchMaxLen);
+		codeSearchInput = truncated;
+		// Sync DOM value in case we cleaned/truncated
+		if (input.value !== truncated) input.value = truncated;
+	};
 
 	/** Format a group node for display: "11 Engine (M54)" or "11 Engine" */
 	const formatGroupNode = (node: GroupNode): string => {
@@ -327,6 +390,12 @@
 		const docTypeChanged = activeDocType?.id !== targetDocType.id;
 		activeDocType = targetDocType;
 
+		// Reset code search when doc type changes
+		if (docTypeChanged) {
+			codeSearchInput = '';
+			codeSearchError = '';
+		}
+
 		// 3. ISB (methode 5): flat doc list, no groups
 		if (targetDocType.methode === 5) {
 			if (docTypeChanged || vehicleChanged) {
@@ -481,10 +550,6 @@
 <section class="space-y-6">
 	<header class="space-y-4">
 		<div>
-			<p class="text-xs tracking-[0.4em] text-slate-500 uppercase dark:text-slate-400">
-				Browse documents
-			</p>
-			<h1 class="text-3xl font-semibold">Document browser</h1>
 			{#if $hasVehicle}
 				<p class="text-sm text-slate-600 dark:text-slate-300">
 					Viewing documents for {$vehicleSummary}
@@ -497,16 +562,16 @@
 		</div>
 
 		<!-- Doc type tabs -->
-		<div class="flex flex-wrap gap-2">
+		<div class="flex flex-wrap gap-1.5">
 			{#if loadingDocTypes}
 				<span
-					class="rounded-full border border-slate-300 bg-white px-4 py-2 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400"
+					class="rounded-full border border-slate-300 bg-white px-3 py-1 text-xs text-slate-500 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-400"
 				>
 					Loading document types...
 				</span>
 			{:else if docTypeError}
 				<span
-					class="rounded-full border border-rose-300 bg-rose-50 px-4 py-2 text-xs text-rose-600 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-300"
+					class="rounded-full border border-rose-300 bg-rose-50 px-3 py-1 text-xs text-rose-600 dark:border-rose-500/40 dark:bg-rose-500/10 dark:text-rose-300"
 				>
 					{docTypeError}
 				</span>
@@ -514,21 +579,53 @@
 				{#each docTypes as docType (docType.id)}
 					<button
 						type="button"
-						class={`rounded-full border px-4 py-2 text-sm font-medium transition ${
+						class={`rounded-full border px-3 py-1 text-xs font-medium transition ${
 							activeDocType?.id === docType.id
 								? 'border-sky-400 bg-sky-100 text-sky-700 dark:bg-sky-500/20 dark:text-sky-100'
 								: 'border-slate-300 bg-white text-slate-600 hover:border-slate-400 dark:border-slate-800 dark:bg-slate-950/60 dark:text-slate-300 dark:hover:border-slate-600'
 						}`}
 						onclick={() => navigateDocType(docType)}
 					>
-						<span class="mr-2 text-xs tracking-[0.3em] text-slate-500 uppercase dark:text-slate-400"
-							>{docType.code}</span
-						>
+						<span class="mr-1 font-semibold">{docType.code}</span>
 						{docType.name}
 					</button>
 				{/each}
 			{/if}
 		</div>
+
+		<!-- Document code search -->
+		{#if activeDocType && activeDocType.keyLength > 0}
+			<div class="flex items-center gap-2">
+				<div class="flex items-stretch rounded-lg border border-slate-300 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-950/60">
+					{#if activeDocType.codePrefix}
+						<span class="flex items-center border-r border-slate-300 bg-slate-50 px-3 text-sm font-medium text-slate-500 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-400 rounded-l-lg">
+							{activeDocType.codePrefix}
+						</span>
+					{/if}
+					<input
+						type="text"
+						inputmode="numeric"
+						placeholder={`Enter ${activeDocType.code} document code`}
+						value={codeSearchInput}
+						oninput={onCodeSearchInput}
+						onkeydown={onCodeSearchKeydown}
+						maxlength={codeSearchMaxLen}
+						class="w-48 bg-transparent px-3 py-2 text-sm text-slate-700 placeholder-slate-400 outline-none dark:text-slate-300 dark:placeholder-slate-500 {activeDocType.codePrefix ? '' : 'rounded-l-lg'}"
+					/>
+				</div>
+				<button
+					type="button"
+					disabled={!codeSearchValid || codeSearchLoading}
+					onclick={performCodeSearch}
+					class="rounded-lg border border-sky-400 bg-sky-100 px-4 py-2 text-sm font-medium text-sky-700 transition hover:bg-sky-200 disabled:cursor-not-allowed disabled:opacity-50 dark:border-sky-500/40 dark:bg-sky-500/20 dark:text-sky-100 dark:hover:bg-sky-500/30"
+				>
+					{codeSearchLoading ? 'Searching...' : 'Search'}
+				</button>
+				{#if codeSearchError}
+					<span class="text-xs text-rose-600 dark:text-rose-400">{codeSearchError}</span>
+				{/if}
+			</div>
+		{/if}
 	</header>
 
 	<!-- Vehicle required notice for ISB -->

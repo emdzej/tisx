@@ -29,6 +29,12 @@ export interface DocType {
   zugriff: number;
   /** Whether a vehicle selection is required (1 = required, e.g. ISB) */
   fzgRequ: number;
+  /** Total length of the document code (0 = no structured codes, e.g. TD/AZD) */
+  keyLength: number;
+  /** Minimum meaningful prefix length for search (typically 2 = main group digits) */
+  minLength: number;
+  /** Fixed alphabetic prefix for codes of this type (e.g. "IB" for ISB), empty if purely numeric */
+  codePrefix: string;
 }
 
 export interface GroupNode {

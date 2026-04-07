@@ -2,6 +2,7 @@
 	import './layout.css';
 	import favicon from '$lib/assets/favicon.svg';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/stores';
 	import { theme, toggleTheme } from '$lib/stores/theme';
 	import { browser } from '$app/environment';
 	import VehicleSelector from '$lib/components/VehicleSelector.svelte';
@@ -11,6 +12,19 @@
 	let { children } = $props();
 
 	let settingsOpen = $state(false);
+
+	/** Which nav link is active based on current route */
+	let activeNav = $derived.by(() => {
+		const path = $page.url.pathname;
+		if (path.startsWith('/symptoms')) return 'symptoms';
+		// /browse and /doc/* both fall under "documents"
+		return 'documents';
+	});
+
+	const navLinkClass = (active: boolean) =>
+		active
+			? 'font-medium text-sky-700 dark:text-sky-300'
+			: 'text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white';
 
 	$effect(() => {
 		if (browser) {
@@ -25,16 +39,18 @@
 	<header
 		class="sticky top-0 z-50 shrink-0 border-b border-slate-200 bg-white/80 backdrop-blur dark:border-slate-800 dark:bg-slate-950/80"
 	>
-		<nav class="mx-auto flex w-full max-w-5xl items-center justify-between gap-4 px-6 py-3">
+		<nav class="mx-auto flex w-full max-w-7xl items-center justify-between gap-4 px-6 py-3">
 			<div class="flex items-center gap-6">
 				<a href={resolve('/')} class="text-lg font-semibold tracking-wide">TISX</a>
 				<div class="flex items-center gap-4 text-sm">
 					<a
-						class="text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
+						class={navLinkClass(activeNav === 'documents')}
+						aria-current={activeNav === 'documents' ? 'page' : undefined}
 						href={resolve('/browse')}>Documents</a
 					>
 					<a
-						class="text-slate-600 hover:text-slate-900 dark:text-slate-300 dark:hover:text-white"
+						class={navLinkClass(activeNav === 'symptoms')}
+						aria-current={activeNav === 'symptoms' ? 'page' : undefined}
 						href={resolve('/symptoms')}>Symptoms</a
 					>
 				</div>
@@ -94,7 +110,7 @@
 		</nav>
 	</header>
 
-	<main class="mx-auto w-full max-w-5xl flex-1 overflow-y-auto px-6 py-10">{@render children()}</main>
+	<main class="mx-auto w-full max-w-7xl flex-1 overflow-y-auto px-6 py-10">{@render children()}</main>
 </div>
 
 <SettingsOverlay bind:open={settingsOpen} />
