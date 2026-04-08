@@ -36,12 +36,7 @@ export {
 } from './utils.js';
 
 // RTF processing
-export {
-  preprocessRtf,
-  flattenNestedTables,
-  postprocessHtml,
-  rtfToHtml,
-} from './rtf.js';
+export { rtfToHtml } from './rtf.js';
 
 // Services — Vehicle
 export {

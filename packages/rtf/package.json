@@ -1,5 +1,5 @@
 {
-  "name": "@emdzej/tisx-core",
+  "name": "@emdzej/tisx-rtf",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -15,13 +15,7 @@
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
-  "dependencies": {
-    "@emdzej/tisx-rtf": "workspace:*",
-    "better-sqlite3": "^11.9.1"
-  },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/node": "^20.0.0",
     "typescript": "^5.0.0"
   }
 }

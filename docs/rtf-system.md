@@ -197,66 +197,45 @@ Pandoc converts `\~` to `\xC2\xA0` (UTF-8 non-breaking space, U+00A0), which app
 
 ---
 
-## Font Table Leak (Pandoc Bug)
-
-### Problem
-
-Pandoc sometimes leaks the RTF `\fonttbl` group as literal text in the HTML output. This produces visible "Helvetica;Symbol;" text in the rendered document.
-
-### Cause
-
-The RTF font table is:
-
-```rtf
-{\deff0\fonttbl{\f0\fswiss Helvetica;}
-{\f1\ftech Symbol;}
-}
-```
-
-Pandoc parses the font names as literal text and inserts them into the HTML output. This occurs in two positions:
-
-1. **At the start** of the HTML: `<p>Helvetica;Symbol;<strong>title</strong></p>`
-2. **Mid-document**: When the RTF starts with a table, the font text appears after the initial table as `<p>Helvetica;Symbol;</p>`
-
-### Fix
-
-Two-layer defense:
-
-1. **`preprocessRtf`**: Strip the entire `\fonttbl` group from the RTF before passing to pandoc:
-   ```js
-   rtf.replace(/\{[^{}]*\\fonttbl\s*(?:\{[^}]*\}\s*)*\}/g, '')
-   ```
-
-2. **`postprocessHtml`** (fallback): Remove any remaining font name text from the HTML output:
-   ```js
-   // Standalone: <p>Helvetica;Symbol;</p> → remove entirely
-   // Mixed: <p>Helvetica;Symbol;<strong>title</strong></p> → strip prefix
-   ```
-
----
-
 ## Rendering Pipeline
 
-The full RTF → HTML pipeline in TISX:
+The RTF → HTML pipeline uses `@emdzej/tisx-rtf`, a custom renderer that natively handles all TIS-specific RTF extensions in a single pass — no external dependencies (pandoc was removed).
 
 ```
 RTF blob from DOCS table
   │
-  ├─ preprocessRtf()
-  │   ├─ Strip \fonttbl group (prevent pandoc font leak)
-  │   ├─ Replace \v .Z. + N:GRAFIK blocks with __IMG_sentinel__ tokens
-  │   └─ Replace text placeholders (--TYP--, --FGSTNR--, etc.)
-  │
-  ├─ pandoc -f rtf -t html
-  │   ├─ Converts standard RTF formatting → HTML
-  │   ├─ Converts \strike → <del> tags
-  │   └─ Converts \~ → non-breaking space (U+00A0)
-  │
-  └─ postprocessHtml()
-      ├─ Strip any remaining font name leaks
-      ├─ Replace __IMG_sentinel__ → <img src="/api/images/..."> tags
-      └─ Convert <del> → <a class="tis-cross-ref"> / <span class="tis-cross-ref">
+  └─ @emdzej/tisx-rtf: rtfToHtml()
+      │
+      ├─ tokenize() — lexer: control words, groups, hex escapes, text
+      │
+      ├─ parse() — stack-based state machine
+      │   ├─ Track formatting state (bold, italic, underline, etc.)
+      │   ├─ Skip destination groups (\fonttbl, \colortbl, \stylesheet, \info)
+      │   ├─ Detect \v hidden text → extract GRAFIK image paths → ImageNode
+      │   ├─ Track \strike → FormatState.strike (emitter maps to cross-ref link)
+      │   ├─ Substitute text placeholders (--TYP--, --FGSTNR--, etc.)
+      │   ├─ Symbol font bullet substitution (\f1 \'b7 → bullet)
+      │   └─ Build table structure (TableRowStart/CellStart/CellEnd/RowEnd)
+      │
+      └─ emit() — walk document nodes → HTML
+          ├─ Character formatting → <strong>, <em>, <u>, <sup>, <sub>
+          ├─ \strike text → <a class="tis-cross-ref" data-hotspot="N">
+          ├─ GRAFIK images → <img class="tis-inline-image" src="/api/images/...">
+          ├─ Tables → <table class="tis-layout-table"> with tis-img-cell/tis-text-cell
+          └─ Paragraph indentation/spacing via inline styles
 ```
+
+### Architecture
+
+The renderer is a separate package (`packages/rtf/`) with three modules:
+
+| Module | Role |
+|---|---|
+| `tokenizer.ts` | Breaks raw RTF into tokens: GroupStart, GroupEnd, ControlWord, ControlSymbol, Text |
+| `parser.ts` | Stack-based state machine; produces document nodes (Paragraph, TextRun, Image, Table*, LineBreak, Tab) |
+| `emitter.ts` | Walks document nodes and produces HTML with TIS-specific CSS classes |
+
+The `@emdzej/tisx-core` package depends on `@emdzej/tisx-rtf` and exposes a thin `rtfToHtml()` wrapper in `packages/core/src/rtf.ts`.
 
 ### Text Placeholders
 

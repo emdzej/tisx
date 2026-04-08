@@ -13,7 +13,7 @@ import type {
 } from '../types.js';
 import { padDocTypeId, filterVariants, buildVehicleFilter } from '../utils.js';
 import { safeDynamicTable } from '../db.js';
-import { rtfToHtml, preprocessRtf, postprocessHtml } from '../rtf.js';
+import { rtfToHtml } from '../rtf.js';
 import { decodeContent } from '../utils.js';
 
 // ---------------------------------------------------------------------------

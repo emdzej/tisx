@@ -5,6 +5,8 @@
 	import type { PageProps } from './$types';
 	import { vehicle, buildVehicleQuery } from '$lib/stores/vehicle';
 	import { addFavouriteDocument, removeFavouriteDocument, favouriteDocuments } from '$lib/stores/favourites';
+	import ImageViewer from '$lib/components/ImageViewer.svelte';
+	import { imageMagnify } from '$lib/actions/imageMagnify';
 
 	type DocumentDetail = {
 		id: number;
@@ -71,6 +73,9 @@
 	/** When a hotspot has multiple targets, show a disambiguation popup */
 	let disambiguationTargets = $state<HotspotTarget[]>([]);
 	let disambiguationVisible = $state(false);
+
+	/** Image lightbox — set to image src to open, null to close */
+	let lightboxSrc = $state<string | null>(null);
 
 	const formatPublicationDate = (value: number | null) => {
 		if (!value) return 'Unknown date';
@@ -299,6 +304,33 @@
 
 	let proseSize = $derived(FONT_SIZES[fontSizeIdx].class);
 
+	// -- Magnifier lens size presets ------------------------------------------
+	const LENS_SIZES = [
+		{ label: 'S', px: 120 },
+		{ label: 'M', px: 180 },
+		{ label: 'L', px: 260 },
+		{ label: 'XL', px: 360 },
+	] as const;
+
+	let lensSizeIdx = $state(
+		browser ? Math.min(Math.max(Number(localStorage.getItem('tisx-lens-size') ?? '1'), 0), LENS_SIZES.length - 1) : 1,
+	);
+
+	function decreaseLens() {
+		if (lensSizeIdx > 0) {
+			lensSizeIdx--;
+			if (browser) localStorage.setItem('tisx-lens-size', String(lensSizeIdx));
+		}
+	}
+	function increaseLens() {
+		if (lensSizeIdx < LENS_SIZES.length - 1) {
+			lensSizeIdx++;
+			if (browser) localStorage.setItem('tisx-lens-size', String(lensSizeIdx));
+		}
+	}
+
+	let currentLensSize = $derived(LENS_SIZES[lensSizeIdx].px);
+
 	$effect(() => {
 		if (browser && !initialized) {
 			initialized = true;
@@ -321,7 +353,7 @@
 
 		<div class="flex items-center gap-2">
 			<!-- Font size controls -->
-			<div class="inline-flex items-center overflow-hidden rounded-full border border-slate-300 dark:border-slate-800">
+			<div class="inline-flex items-center overflow-hidden rounded-full border border-slate-300 dark:border-slate-800" title="Text size">
 				<button
 					type="button"
 					class="px-2.5 py-2 text-sm text-slate-700 transition hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent dark:text-slate-200 dark:hover:bg-slate-800"
@@ -342,6 +374,38 @@
 					onclick={increaseFont}
 					disabled={fontSizeIdx === FONT_SIZES.length - 1}
 					title="Increase font size"
+				>
+					<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
+					</svg>
+				</button>
+			</div>
+
+			<!-- Magnifier lens size control -->
+			<div class="inline-flex items-center overflow-hidden rounded-full border border-slate-300 dark:border-slate-800" title="Magnifier size — hold Alt/Option over an image to zoom">
+				<button
+					type="button"
+					class="px-2.5 py-2 text-sm text-slate-700 transition hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent dark:text-slate-200 dark:hover:bg-slate-800"
+					onclick={decreaseLens}
+					disabled={lensSizeIdx === 0}
+					title="Decrease magnifier size"
+				>
+					<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M20 12H4" />
+					</svg>
+				</button>
+				<span class="inline-flex min-w-[2.5rem] items-center justify-center gap-1 border-x border-slate-300 px-1 py-2 text-center text-xs font-medium text-slate-600 dark:border-slate-800 dark:text-slate-300">
+					<svg class="h-3.5 w-3.5 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+						<path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+					</svg>
+					{LENS_SIZES[lensSizeIdx].label}
+				</span>
+				<button
+					type="button"
+					class="px-2.5 py-2 text-sm text-slate-700 transition hover:bg-slate-100 disabled:opacity-30 disabled:hover:bg-transparent dark:text-slate-200 dark:hover:bg-slate-800"
+					onclick={increaseLens}
+					disabled={lensSizeIdx === LENS_SIZES.length - 1}
+					title="Increase magnifier size"
 				>
 					<svg class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
 						<path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
@@ -399,8 +463,9 @@
 		<div class="space-y-6">
 			{#if textUrl && !textError && !textLoading}
 				<article
-					class="prose max-w-none rounded-2xl border border-slate-200 bg-white p-6 prose-slate dark:border-slate-800 dark:bg-slate-950/70 dark:prose-invert [&_.tis-inline-image]:mx-auto [&_.tis-inline-image]:block [&_.tis-inline-image]:max-w-full [&_.tis-cross-ref]:cursor-pointer [&_.tis-cross-ref]:text-sky-600 [&_.tis-cross-ref]:no-underline hover:[&_.tis-cross-ref]:underline dark:[&_.tis-cross-ref]:text-sky-400 [&_a.tis-cross-ref]:font-medium [&_span.tis-cross-ref]:font-medium [&_.tis-layout-table]:w-full [&_.tis-layout-table]:border-collapse [&_.tis-img-cell]:w-[45%] [&_.tis-img-cell]:align-top [&_.tis-img-cell]:pr-4 [&_.tis-text-cell]:align-top [&_.tis-img-cell_.tis-inline-image]:mx-0 {proseSize}"
+					class="prose max-w-none rounded-2xl border border-slate-200 bg-white p-6 prose-slate dark:border-slate-800 dark:bg-slate-950/70 dark:prose-invert [&_.tis-inline-image]:mx-auto [&_.tis-inline-image]:block [&_.tis-inline-image]:max-w-full [&_.tis-cross-ref]:cursor-pointer [&_.tis-cross-ref]:text-sky-600 [&_.tis-cross-ref]:no-underline hover:[&_.tis-cross-ref]:underline dark:[&_.tis-cross-ref]:text-sky-400 [&_a.tis-cross-ref]:font-medium [&_span.tis-cross-ref]:font-medium [&_.tis-layout-table]:max-w-full [&_.tis-layout-table]:border-collapse [&_.tis-img-cell]:w-[45%] [&_.tis-img-cell]:align-top [&_.tis-img-cell]:pr-4 [&_.tis-text-cell]:align-top [&_.tis-img-cell_.tis-inline-image]:mx-0 {proseSize}"
 					onclick={handleArticleClick}
+					use:imageMagnify={{ onclick: (src) => (lightboxSrc = src), lensSize: currentLensSize }}
 				>
 					{#if renderedHtml}
 						<!-- eslint-disable-next-line svelte/no-at-html-tags -- server-rendered HTML from Pandoc with RTF->HTML conversion -->
@@ -471,6 +536,9 @@
 		</div>
 	{/if}
 </section>
+
+<!-- Image lightbox viewer -->
+<ImageViewer src={lightboxSrc} onclose={() => (lightboxSrc = null)} />
 
 <!-- Disambiguation popup for hotspots with multiple targets -->
 {#if disambiguationVisible}

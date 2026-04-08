@@ -21,6 +21,9 @@ importers:
 
   packages/core:
     dependencies:
+      '@emdzej/tisx-rtf':
+        specifier: workspace:*
+        version: link:../rtf
       better-sqlite3:
         specifier: ^11.9.1
         version: 11.10.0
@@ -31,6 +34,12 @@ importers:
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.33
+      typescript:
+        specifier: ^5.0.0
+        version: 5.9.3
+
+  packages/rtf:
+    devDependencies:
       typescript:
         specifier: ^5.0.0
         version: 5.9.3
