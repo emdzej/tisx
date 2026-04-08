@@ -12,6 +12,7 @@ WORKDIR /app
 
 # Copy package files first for better caching
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY packages/rtf/package.json ./packages/rtf/
 COPY packages/core/package.json ./packages/core/
 COPY packages/web/package.json ./packages/web/
 COPY packages/server/package.json ./packages/server/
@@ -21,6 +22,7 @@ RUN pnpm install --frozen-lockfile
 
 # Copy source code
 COPY turbo.json ./
+COPY packages/rtf ./packages/rtf
 COPY packages/core ./packages/core
 COPY packages/web ./packages/web
 COPY packages/server ./packages/server
@@ -33,8 +35,8 @@ RUN pnpm build
 # ============================================
 FROM node:22-alpine AS production
 
-# Install pandoc for RTF conversion and build tools for better-sqlite3 native module
-RUN apk add --no-cache pandoc python3 make g++
+# Install build tools for better-sqlite3 native module
+RUN apk add --no-cache python3 make g++
 
 # Install pnpm (needed to resolve workspace dependencies)
 RUN corepack enable && corepack prepare pnpm@9.15.4 --activate
@@ -43,6 +45,10 @@ WORKDIR /app
 
 # Set up workspace structure so pnpm can link @emdzej/tisx-core
 COPY --from=builder /app/package.json /app/pnpm-lock.yaml /app/pnpm-workspace.yaml ./
+
+# Copy built rtf package (core depends on it at runtime)
+COPY --from=builder /app/packages/rtf/package.json ./packages/rtf/
+COPY --from=builder /app/packages/rtf/dist ./packages/rtf/dist
 
 # Copy built core package (server depends on it at runtime)
 COPY --from=builder /app/packages/core/package.json ./packages/core/
