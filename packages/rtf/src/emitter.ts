@@ -41,6 +41,15 @@ export const emit = (nodes: DocNode[], options?: EmitOptions): string => {
   let inRow = false;
   let inCell = false;
   let hotspotCounter = 0;
+  let inHotspot = false;
+
+  /** Close an open cross-reference hotspot anchor */
+  const closeHotspot = () => {
+    if (inHotspot) {
+      out.push('</a>');
+      inHotspot = false;
+    }
+  };
 
   // Track open inline tags for proper nesting
   let currentTags: string[] = [];
@@ -53,6 +62,7 @@ export const emit = (nodes: DocNode[], options?: EmitOptions): string => {
     if (inParagraph) {
       closeInlineTags(out, currentTags);
       currentTags = [];
+      closeHotspot();
       out.push('</p>\n');
       inParagraph = false;
     }
@@ -127,38 +137,43 @@ export const emit = (nodes: DocNode[], options?: EmitOptions): string => {
 
         if (run.format.strike) {
           // TIS cross-reference: \strike text → <a class="tis-cross-ref">
-          hotspotCounter++;
-          out.push(
-            `<a class="tis-cross-ref" data-hotspot="${hotspotCounter}" href="#">`,
-          );
+          // Consecutive strike runs belong to the same hotspot — only
+          // open a new <a> when entering a strike sequence.
+          if (!inHotspot) {
+            hotspotCounter++;
+            inHotspot = true;
+            out.push(
+              `<a class="tis-cross-ref" data-hotspot="${hotspotCounter}" href="#">`,
+            );
+          }
           openInlineTags(out, tags);
           currentTags = [...tags];
           out.push(escapeHtml(run.text));
           closeInlineTags(out, currentTags);
           currentTags = [];
-          out.push('</a>');
-        } else if (run.format.superscript > 0) {
-          openInlineTags(out, tags);
-          currentTags = [...tags];
-          out.push(`<sup>${escapeHtml(run.text)}</sup>`);
-        } else if (run.format.superscript < 0) {
-          openInlineTags(out, tags);
-          currentTags = [...tags];
-          out.push(`<sub>${escapeHtml(run.text)}</sub>`);
         } else {
+          closeHotspot();
           openInlineTags(out, tags);
           currentTags = [...tags];
-          out.push(escapeHtml(run.text));
+          if (run.format.superscript > 0) {
+            out.push(`<sup>${escapeHtml(run.text)}</sup>`);
+          } else if (run.format.superscript < 0) {
+            out.push(`<sub>${escapeHtml(run.text)}</sub>`);
+          } else {
+            out.push(escapeHtml(run.text));
+          }
         }
         break;
       }
 
       case NodeType.LineBreak: {
+        closeHotspot();
         out.push('<br>');
         break;
       }
 
       case NodeType.Tab: {
+        closeHotspot();
         out.push('&emsp;');
         break;
       }

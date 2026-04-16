@@ -332,7 +332,9 @@
 	let currentLensSize = $derived(LENS_SIZES[lensSizeIdx].px);
 
 	$effect(() => {
-		if (browser && !initialized) {
+		// Track `id` so the effect re-runs when the route param changes
+		const _docId = id;
+		if (browser) {
 			initialized = true;
 			loadDocument();
 		}
