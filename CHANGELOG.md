@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.3.0] - 2026-04-16
+
+### Fixed
+
+- **Cross-reference hotspot numbering** — consecutive `\strike` text runs separated by non-breaking spaces (`\~`) were each counted as separate hotspots, causing a numbering mismatch with the THOTSPOT table. Tool codes like "00 0 200" are now correctly merged into a single hotspot link
+- **Document page navigation** — navigating between documents via cross-reference links updated the URL but did not reload the document content due to a missing reactive dependency in the SvelteKit `$effect`
+
 ## [0.2.0] - 2026-04-08
 
 ### Added
